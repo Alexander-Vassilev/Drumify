@@ -1,0 +1,65 @@
+############################
+# OS junk
+############################
+.DS_Store
+Thumbs.db
+desktop.ini
+
+############################
+# Build directories
+############################
+build/
+Builds/
+cmake-build-*/
+out/
+
+############################
+# Visual Studio
+############################
+.vs/
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.VC.db
+*.VC.opendb
+ipch/
+
+############################
+# Xcode
+############################
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+DerivedData/
+
+############################
+# Projucer
+############################
+*.jucer.user
+
+############################
+# IDEs / Editors
+############################
+.vscode/
+.idea/
+*.swp
+*.swo
+
+############################
+# JUCE / Audio plugin artifacts
+############################
+*.component
+*.vst3
+*.vst
+*.aaxplugin
+*.exe
+*.dll
+*.dylib
+*.so
+
+############################
+# Logs / cache
+############################
+*.log
+.cache/
