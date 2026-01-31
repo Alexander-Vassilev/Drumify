@@ -23,6 +23,7 @@ public:
     void deactivate();
     void addSample(float sample);
     void processSample(float sample, float amp);
+    void initBuffer();
 private:
     static constexpr int numHits = 64;
     const int minOnsetSamples = 512;
@@ -35,6 +36,7 @@ private:
     int storedHitsIndex = 0;
     int currHitIndex = 0;
     bool isActivated = false;
+    bool isNewBuffer = true; // Creating new buffer before officially activating an onset
     int currOnsetSampleCount = 0;
     int currOffsetSampleCount = 0;
     int currSample = 0;

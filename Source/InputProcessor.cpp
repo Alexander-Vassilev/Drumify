@@ -12,20 +12,27 @@
 
 void InputProcessor::activate() {
     isActivated = true;
-    storedHitsIndex++;
-    storedHits[storedHitsIndex].onsetSample = currSample;
-    storedHits[storedHitsIndex].buffer.setSize(1, samplesPerHit);
-    writePtr = storedHits[storedHitsIndex].buffer.getWritePointer(0);
-    currOnsetSampleCount = 0;
 };
+
+void InputProcessor::initBuffer() {
+    if (isNewBuffer) {
+        storedHits[storedHitsIndex].onsetSample = currSample;
+        storedHits[storedHitsIndex].buffer.setSize(1, samplesPerHit);
+        writePtr = storedHits[storedHitsIndex].buffer.getWritePointer(0);
+        storedHitsIndex++;
+        currOnsetSampleCount = 0;
+        isNewBuffer = false;
+    }
+}
 
 void InputProcessor::deactivate() {
     isActivated = false;
     currOffsetSampleCount = 0;
+    isNewBuffer = true;
 };
 
 void InputProcessor::addSample(float sample) {
-    if (currHitIndex < samplesPerHit) {
+    if (currHitIndex < samplesPerHit - 5) {
         writePtr[currHitIndex] = sample;
         currHitIndex++;
     }
@@ -39,6 +46,7 @@ void InputProcessor::processSample(float sample, float amp) {
             if (isActivated) {
                 addSample(sample);
             } else {
+                initBuffer();
                 currOnsetSampleCount++;
                 addSample(sample);
                 
