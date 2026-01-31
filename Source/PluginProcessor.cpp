@@ -178,7 +178,7 @@ void HackBrownAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
             for (int sample = 0; sample < buffer.getNumSamples(); sample++) {
                 float amp = 2 * abs(envelopeFollower.processSample(channel, inputData[sample]));
                 if (amp > 0.0) {
-                    inputProcessor.Activate();
+                    //inputProcessor.Activate();
                     //channelData[sample] = sineGenerator.processSample(amp);
                     channelData[sample] = inputData[sample];
                 } else {
@@ -186,7 +186,7 @@ void HackBrownAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
                     channelData[sample] = 0;
                 }
                 
-                inputProcessor.AddSample(inputData[sample]);
+                //inputProcessor.AddSample(inputData[sample]);
             }
         }
         else {

@@ -22,6 +22,6 @@ void InputProcessor::Deactivate() {
 };
 
 void InputProcessor::AddSample(float sample) {
-    writePtr[currHitIndex] = sample;
+    //writePtr[currHitIndex] = sample;
     currHitIndex++;
 };
