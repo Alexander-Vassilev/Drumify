@@ -4,13 +4,14 @@
               addUsingNamespaceToJuceHeader="0" jucerFormatVersion="1" cppLanguageStandard="20">
   <MAINGROUP id="HqYlGJ" name="HackBrown">
     <GROUP id="{14C3BC7E-3FBE-C008-1AB6-8469D98A27DE}" name="Source">
+      <GROUP id="{8E3204D1-BD8C-E384-31BA-1B4519EC1617}" name="Resources">
+        <FILE id="cAdOf8" name="hat.wav" compile="0" resource="1" file="hat.wav"/>
+        <FILE id="I113QK" name="kick.wav" compile="0" resource="1" file="kick.wav"/>
+        <FILE id="rVSYUf" name="snare.wav" compile="0" resource="1" file="snare.wav"/>
+      </GROUP>
       <FILE id="W6CyyJ" name="SineGenerator.h" compile="0" resource="0" file="Source/SineGenerator.h"/>
-      <FILE id="GRqOps" name="InputProcessor.cpp" compile="1" resource="0"
-            file="Source/InputProcessor.cpp"/>
       <FILE id="xG5WNG" name="PluginProcessor.cpp" compile="1" resource="0"
             file="Source/PluginProcessor.cpp"/>
-      <FILE id="zAeaP3" name="InputProcessor.h" compile="0" resource="0"
-            file="Source/InputProcessor.h"/>
       <FILE id="MDSJKf" name="SineGenerator.cpp" compile="1" resource="0"
             file="Source/SineGenerator.cpp"/>
       <FILE id="aBpQvG" name="PluginProcessor.h" compile="0" resource="0"
@@ -87,28 +88,5 @@
         <MODULEPATH id="juce_osc" path="/Users/lightspark/Documents/JuceProjects/JUCE/modules"/>
       </MODULEPATHS>
     </VS2026>
-    <VS2022 targetFolder="Builds/VisualStudio2022">
-      <CONFIGURATIONS>
-        <CONFIGURATION isDebug="1" name="Debug"/>
-        <CONFIGURATION isDebug="0" name="Release"/>
-      </CONFIGURATIONS>
-      <MODULEPATHS>
-        <MODULEPATH id="juce_audio_basics" path="C:\JUCE\modules"/>
-        <MODULEPATH id="juce_audio_devices" path="C:\JUCE\modules"/>
-        <MODULEPATH id="juce_audio_formats" path="C:\JUCE\modules"/>
-        <MODULEPATH id="juce_audio_plugin_client" path="C:\JUCE\modules"/>
-        <MODULEPATH id="juce_audio_processors" path="C:\JUCE\modules"/>
-        <MODULEPATH id="juce_audio_processors_headless" path="C:\JUCE\modules"/>
-        <MODULEPATH id="juce_audio_utils" path="C:\JUCE\modules"/>
-        <MODULEPATH id="juce_core" path="C:\JUCE\modules"/>
-        <MODULEPATH id="juce_data_structures" path="C:\JUCE\modules"/>
-        <MODULEPATH id="juce_dsp" path="C:\JUCE\modules"/>
-        <MODULEPATH id="juce_events" path="C:\JUCE\modules"/>
-        <MODULEPATH id="juce_graphics" path="C:\JUCE\modules"/>
-        <MODULEPATH id="juce_gui_basics" path="C:\JUCE\modules"/>
-        <MODULEPATH id="juce_gui_extra" path="C:\JUCE\modules"/>
-        <MODULEPATH id="juce_osc" path="C:\JUCE\modules"/>
-      </MODULEPATHS>
-    </VS2022>
   </EXPORTFORMATS>
 </JUCERPROJECT>
