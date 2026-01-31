@@ -10,6 +10,7 @@
 
 #include <JuceHeader.h>
 #include "SineGenerator.h"
+#include "InputProcessor.h"
 
 //==============================================================================
 /**
@@ -60,6 +61,7 @@ private:
     juce::AudioFormatManager formatManager;
     std::unique_ptr<juce::AudioFormatReaderSource> readerSource;
     juce::AudioTransportSource transportSource;
+    InputProcessor inputProcessor;
     
     //==============================================================================
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HackBrownAudioProcessor)
