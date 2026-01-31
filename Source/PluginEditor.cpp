@@ -17,6 +17,7 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
     recordButton.onClick = [&]() {
         const auto message = recordButton.getToggleState() ? "Recording!" : "Record";
         recordButton.setButtonText(message);
+        p.recordingEnabled.store(true);
     };
 
     // Make sure that before the constructor has finished, you've set the

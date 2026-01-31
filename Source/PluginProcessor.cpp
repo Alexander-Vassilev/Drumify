@@ -270,6 +270,8 @@ void HackBrownAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
     midiMessages.clear();
     return;
+} else {
+    buffer.clear();
 }
 
 }
@@ -319,5 +321,4 @@ void HackBrownAudioProcessor::makeTestRender()
     renderedDrumBuffer = renderDrumLoopOffline(events, sr, outLen);
 
     renderedReadPos = 0;
-    isPlayingRendered = true;
 }

@@ -55,6 +55,8 @@ public:
     //==============================================================================
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
+    
+    std::atomic<bool> recordingEnabled { false };
 
 private:
     juce::dsp::BallisticsFilter<float> envelopeFollower;
@@ -88,7 +90,7 @@ private:
     // Rendered playback state
     juce::AudioBuffer<float> renderedDrumBuffer;
     int renderedReadPos = 0;
-    bool isPlayingRendered = false;
+    bool isPlayingRendered = true;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HackBrownAudioProcessor)
 };
