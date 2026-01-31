@@ -25,6 +25,7 @@ public:
     //==============================================================================
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
+    void makeTestRender();
 
    #ifndef JucePlugin_PreferredChannelConfigurations
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
@@ -55,15 +56,39 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
-    std::atomic<bool> recordingEnabled { false };
 private:
     juce::dsp::BallisticsFilter<float> envelopeFollower;
     SineGenerator sineGenerator;
-    juce::AudioFormatManager formatManager;
-    std::unique_ptr<juce::AudioFormatReaderSource> readerSource;
-    juce::AudioTransportSource transportSource;
     InputProcessor inputProcessor;
+
+    double currentSampleRate = 44100.0;
+
+    juce::Synthesiser drumSynth;
+    juce::AudioFormatManager formatManager;
     
-    //==============================================================================
+    void loadSampleFromBinaryData (const juce::String& name,
+                               const void* data,
+                               int dataSize,
+                               int midiNote);
+
+
+    // Offline event type (absolute time)
+    struct DrumEventAbs
+    {
+        int sampleIndex;   // absolute sample index in rendered timeline
+        int midiNote;      // 36 kick, 38 snare, 42 hat...
+        float velocity01;  // 0..1
+    };
+
+    // Offline render
+    juce::AudioBuffer<float> renderDrumLoopOffline (const std::vector<DrumEventAbs>& events,
+                                                    double sampleRate,
+                                                    int outputNumSamples);
+
+    // Rendered playback state
+    juce::AudioBuffer<float> renderedDrumBuffer;
+    int renderedReadPos = 0;
+    bool isPlayingRendered = false;
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HackBrownAudioProcessor)
 };
