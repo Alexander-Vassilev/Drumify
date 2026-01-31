@@ -10,18 +10,55 @@
 
 #include "InputProcessor.h"
 
-void InputProcessor::Activate() {
+void InputProcessor::activate() {
     isActivated = true;
     storedHitsIndex++;
-    storedHits[storedHitsIndex].setSize(1, samplesPerHit);
-    writePtr = storedHits[storedHitsIndex].getWritePointer(0);
+    storedHits[storedHitsIndex].onsetSample = currSample;
+    storedHits[storedHitsIndex].buffer.setSize(1, samplesPerHit);
+    writePtr = storedHits[storedHitsIndex].buffer.getWritePointer(0);
+    currOnsetSampleCount = 0;
 };
 
-void InputProcessor::Deactivate() {
+void InputProcessor::deactivate() {
     isActivated = false;
+    currOffsetSampleCount = 0;
 };
 
-void InputProcessor::AddSample(float sample) {
-    //writePtr[currHitIndex] = sample;
-    currHitIndex++;
+void InputProcessor::addSample(float sample) {
+    if (currHitIndex < samplesPerHit) {
+        writePtr[currHitIndex] = sample;
+        currHitIndex++;
+    }
 };
+
+void InputProcessor::processSample(float sample, float amp) {
+    if (storedHitsIndex < numHits) {
+        currSample++;
+        
+        if (amp > ampThreshold) {
+            if (isActivated) {
+                addSample(sample);
+            } else {
+                currOnsetSampleCount++;
+                addSample(sample);
+                
+                if (currOnsetSampleCount > minOnsetSamples) {
+                    activate();
+                    currOnsetSampleCount = 0;
+                }
+            }
+        } else {
+            if (isActivated) {
+                addSample(sample);
+                currOffsetSampleCount++;
+                
+                if (currOffsetSampleCount > minOffsetSamples) {
+                    deactivate();
+                }
+            } else if (currOnsetSampleCount > 0) {
+                currOnsetSampleCount = 0;
+                storedHits[storedHitsIndex].buffer.clear();
+            }
+        }
+    }
+}
