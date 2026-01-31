@@ -4,6 +4,10 @@
               addUsingNamespaceToJuceHeader="0" jucerFormatVersion="1" cppLanguageStandard="20">
   <MAINGROUP id="HqYlGJ" name="HackBrown">
     <GROUP id="{14C3BC7E-3FBE-C008-1AB6-8469D98A27DE}" name="Source">
+      <FILE id="UESJCs" name="InputProcessor.cpp" compile="1" resource="0"
+            file="Source/InputProcessor.cpp"/>
+      <FILE id="CUDY3s" name="InputProcessor.h" compile="0" resource="0"
+            file="Source/InputProcessor.h"/>
       <FILE id="W6CyyJ" name="SineGenerator.h" compile="0" resource="0" file="Source/SineGenerator.h"/>
       <FILE id="xG5WNG" name="PluginProcessor.cpp" compile="1" resource="0"
             file="Source/PluginProcessor.cpp"/>
