@@ -55,6 +55,7 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
+    std::atomic<bool> recordingEnabled { false };
 private:
     juce::dsp::BallisticsFilter<float> envelopeFollower;
     SineGenerator sineGenerator;
