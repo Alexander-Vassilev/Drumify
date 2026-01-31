@@ -20,8 +20,6 @@ void SineGenerator::process(float* output, int numSamples, const float* amplitud
     float phaseInc = doublePi * frequency / currentSampleRate;
     
     for (int i = 0; i < numSamples; i++) {
-        output[i] = 0;
-        float phaseInc = doublePi * frequency / currentSampleRate;
         output[i] = abs(amplitudes[i]) * std::sinf(phase);
         phase += phaseInc;
     }

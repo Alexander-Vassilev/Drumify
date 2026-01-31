@@ -5,8 +5,12 @@
   <MAINGROUP id="HqYlGJ" name="HackBrown">
     <GROUP id="{14C3BC7E-3FBE-C008-1AB6-8469D98A27DE}" name="Source">
       <FILE id="W6CyyJ" name="SineGenerator.h" compile="0" resource="0" file="Source/SineGenerator.h"/>
+      <FILE id="GRqOps" name="InputProcessor.cpp" compile="1" resource="0"
+            file="Source/InputProcessor.cpp"/>
       <FILE id="xG5WNG" name="PluginProcessor.cpp" compile="1" resource="0"
             file="Source/PluginProcessor.cpp"/>
+      <FILE id="zAeaP3" name="InputProcessor.h" compile="0" resource="0"
+            file="Source/InputProcessor.h"/>
       <FILE id="MDSJKf" name="SineGenerator.cpp" compile="1" resource="0"
             file="Source/SineGenerator.cpp"/>
       <FILE id="aBpQvG" name="PluginProcessor.h" compile="0" resource="0"
