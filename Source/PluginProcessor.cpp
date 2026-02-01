@@ -173,7 +173,7 @@ void HackBrownAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
     loadSampleFromBinaryData ("Snare", BinaryData::Snare_wav, BinaryData::Snare_wavSize, 38);
     loadSampleFromBinaryData ("Hat",   BinaryData::Hat_wav,   BinaryData::Hat_wavSize,   42);
     currentSampleRate = sampleRate;
-    makeTestRender(); //TEMP, remove it later!!
+    //makeTestRender(); //TEMP, remove it later!!
 }
 
 void HackBrownAudioProcessor::releaseResources()
@@ -222,10 +222,14 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
     juce::AudioBuffer<float>* kickData = samplerSound->getAudioData();
     int kickLen = kickData->getNumSamples();
     
+    DBG("built ma kick");
+    
     juce::SynthesiserSound::Ptr snare = drumSynth.getSound(1);
     samplerSound = dynamic_cast<juce::SamplerSound*>(snare.get());
     juce::AudioBuffer<float>* snareData = samplerSound->getAudioData();
     int snareLen = snareData->getNumSamples();
+    
+    DBG("built ma snare");
     
     juce::SynthesiserSound::Ptr hat = drumSynth.getSound(2);
     samplerSound = dynamic_cast<juce::SamplerSound*>(hat.get());
@@ -233,7 +237,9 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
     int hatLen = hatData->getNumSamples();
     
     for (DrumEventAbs event : events) {
+        DBG("in da loop");
         juce::AudioBuffer<float> copier;
+        bool skip = false;
         
         switch (event.midiNote) {
             case 36:
@@ -245,13 +251,19 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
             case 42:
                 copier = *hatData;
                 break;
+            default:
+                skip = true;
+                break;
         };
         
-        out.copyFrom(0, event.sampleIndex, copier, 0, 0, copier.getNumSamples());
+        if (!skip) {
+            out.copyFrom(0, event.sampleIndex, copier, 0, 0, copier.getNumSamples());
+        }
     }
     
     //out.copyFrom(0, processLen, *audioData, 0, 0, processLen);
     //out.clear(0, 2 * processLen, outputNumSamples - 2 * processLen);
+    DBG("finished building buffer");
     
     return out;
     //auto* snare = drumSynth.getSound(1);
@@ -423,6 +435,25 @@ juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
     return new HackBrownAudioProcessor();
 }
+
+void HackBrownAudioProcessor::buildDrumBuffer() {
+    std::vector<DrumEventAbs> events;
+    const double sr = currentSampleRate;
+    int lastSampleHit = 0;
+    int lastSize = 0;
+    
+    for (auto processedHit : inputProcessor.classifiedHits) {
+        lastSampleHit = processedHit.onsetSample;
+        lastSize = processedHit.durationSec;
+        events.push_back({ processedHit.onsetSample, (int)processedHit.type, 1.0f }); // kick at 0s
+    }
+    
+    const int outLen = int(lastSampleHit + lastSize * sr + 100);
+    renderedDrumBuffer = renderDrumLoopOffline(events, sr, outLen);
+
+    renderedReadPos = 0;
+}
+
 //====================TEST==========================================================
 void HackBrownAudioProcessor::makeTestRender()
 {

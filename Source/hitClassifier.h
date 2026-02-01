@@ -6,10 +6,10 @@ struct MouthHit;
 
 enum class HitType
 {
-    Kick,
-    Snare,
-    Hat,
-    Unknown
+    Kick = 36,
+    Snare = 38,
+    Hat = 42,
+    Unknown = 43
 };
 
 struct HitFeatures

@@ -218,6 +218,7 @@ void InputProcessor::classifyStoredHits(double sampleRate)
 
         ClassifiedHit classified;
         classified.hitIndex = i;
+        classified.onsetSample = hit.onsetSample;
         classified.type = HitClassifier::classify(features);
         classified.rms = features.rms;
         classified.zcr = features.zcr;

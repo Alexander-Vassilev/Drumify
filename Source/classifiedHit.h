@@ -4,6 +4,7 @@
 struct ClassifiedHit
 {
     int hitIndex = -1;          // index into storedHits
+    int onsetSample = 0;        // sample where hit begins
     HitType type = HitType::Unknown;
 
     // Optional but useful

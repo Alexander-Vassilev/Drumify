@@ -14,6 +14,7 @@
 #include "hitClassifier.h"
 #include "classifiedHit.h"
 #include <vector>
+
 struct MouthHit {
     int onsetSample;
     int hitLength;

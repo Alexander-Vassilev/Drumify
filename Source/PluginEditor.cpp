@@ -49,6 +49,7 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
         if (!isOn && p.recordingStarted.load()) {
             // algorithm classifies/do classification
             p.inputProcessor.classifyStoredHits(p.getSampleRate());
+            p.buildDrumBuffer();
 
             DBG("---- Editor sees classified hits ----");
             for (const auto& ch : p.inputProcessor.classifiedHits) //hits are stored in inputProcessor.classifiedhits
@@ -58,9 +59,6 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
                     << HitClassifier::toString(ch.type));
             }
 
-            // Call Gabe FFT Algorithm Here
-            // p.startRecording();
-            // Call Gabe FFT Algorithm Here  --> do classification instead
             recordButton.setButtonText("Recorded Thing");
             addAndMakeVisible(playButton);
         }
