@@ -14,11 +14,14 @@ namespace BinaryData
     extern const char*   Kick_wav;
     const int            Kick_wavSize = 43994;
 
+    extern const char*   morning_png;
+    const int            morning_pngSize = 2105090;
+
     extern const char*   Snare_wav;
     const int            Snare_wavSize = 81728;
 
     // Number of elements in the namedResourceList and originalFileNames arrays.
-    const int namedResourceListSize = 3;
+    const int namedResourceListSize = 4;
 
     // Points to the start of a list of resource names.
     extern const char* namedResourceList[];

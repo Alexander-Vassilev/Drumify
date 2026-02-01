@@ -14,6 +14,7 @@
       <GROUP id="{8E3204D1-BD8C-E384-31BA-1B4519EC1617}" name="Resources">
         <FILE id="IjcVWC" name="Hat.wav" compile="0" resource="1" file="DrumSamples/Hat.wav"/>
         <FILE id="u1utX3" name="Kick.wav" compile="0" resource="1" file="DrumSamples/Kick.wav"/>
+        <FILE id="jetgjQ" name="morning.png" compile="0" resource="1" file="../CS Stuff/hack@brown26/HackBrown2026/morning.png"/>
         <FILE id="jezoTa" name="Snare.wav" compile="0" resource="1" file="DrumSamples/Snare.wav"/>
       </GROUP>
       <FILE id="W6CyyJ" name="SineGenerator.h" compile="0" resource="0" file="Source/SineGenerator.h"/>
