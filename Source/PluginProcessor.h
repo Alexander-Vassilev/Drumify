@@ -64,7 +64,6 @@ public:
 private:
     juce::dsp::BallisticsFilter<float> envelopeFollower;
     SineGenerator sineGenerator;
-    InputProcessor inputProcessor;
 
     double currentSampleRate = 44100.0;
 
