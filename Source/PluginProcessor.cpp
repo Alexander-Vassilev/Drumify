@@ -236,9 +236,10 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
     juce::AudioBuffer<float>* hatData = samplerSound->getAudioData();
     int hatLen = hatData->getNumSamples();
     int offset = 0;
+    float speedUpFactor = 0.7f;
     
     if (events.size() >= 1) {
-        offset = events[0].sampleIndex;
+        offset = (int)(events[0].sampleIndex * 0.7);
     }
     
     for (int i = 0; i < events.size(); i++) {
@@ -263,7 +264,7 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
         };
         
         if (!skip) {
-            out.copyFrom(0, events[i].sampleIndex - offset, copier, 0, 0, copier.getNumSamples());
+            out.copyFrom(0, (0.7 * events[i].sampleIndex) - offset, copier, 0, 0, copier.getNumSamples());
         }
         DBG("copied");
     }
@@ -361,6 +362,7 @@ void HackBrownAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
             // Only process if we have a corresponding input channel
             if (channel < totalNumInputChannels) {
                 for (int sample = 0; sample < buffer.getNumSamples(); sample++) {
+                    //DBG(buffer.getNumSamples());
                     float amp = envelopeFollower.processSample(channel, inputData[sample]);
                     inputProcessor.processSample(inputData[sample], amp);
                 }
