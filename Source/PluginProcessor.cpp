@@ -240,8 +240,8 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
     if (events.size() >= 1) {
         offset = events[0].sampleIndex;
     }
-
-    for (int i = 0; i < events.size() - 1; i++) {
+    
+    for (int i = 0; i < events.size(); i++) {
         DBG("num events" << events.size());
         juce::AudioBuffer<float> copier;
         bool skip = false;

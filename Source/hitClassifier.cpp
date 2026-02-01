@@ -54,15 +54,15 @@ HitFeatures HitClassifier::extractFeatures(const juce::AudioBuffer<float>& buffe
 HitType HitClassifier::classify(const HitFeatures& f)
 {
     // Hat: bright/noisy and short
-    if (f.zcr > 0.15f && f.durationSec < 0.12f)
+    if (f.zcr > 0.15f) //&& f.durationSec < 0.12f
         return HitType::Hat;
 
     // Kick: low-frequency dominant, usually longer
-    if (f.zcr < 0.05f && f.durationSec > 0.15f && f.rms > 0.02f)
+    if (f.zcr < 0.08f && f.rms > 0.015f) //&& f.durationSec > 0.15f
         return HitType::Kick;
 
     // Snare: in-between; often noisy but not as high ZCR as hats
-    if (f.zcr >= 0.05f && f.zcr <= 0.15f)
+    if (f.zcr >= 0.08f && f.zcr <= 0.15f)
         return HitType::Snare;
 
     return HitType::Unknown;
