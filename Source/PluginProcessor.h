@@ -25,6 +25,7 @@ public:
     //==============================================================================
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
+    void makeTestRender();
 
    #ifndef JucePlugin_PreferredChannelConfigurations
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
@@ -54,7 +55,12 @@ public:
     //==============================================================================
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
-
+    
+    std::atomic<bool> recordingEnabled { false };
+    std::atomic<bool> recordingStarted { false };
+    std::atomic<bool> isPlaybackOn { false };
+    juce::AudioBuffer<float> renderedTestBuffer;
+    InputProcessor inputProcessor;
 private:
     juce::dsp::BallisticsFilter<float> envelopeFollower;
     SineGenerator sineGenerator;
