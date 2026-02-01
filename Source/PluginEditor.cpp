@@ -58,6 +58,7 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
         
         if (!isOn && p.recordingStarted.load()) {
             // algorithm classifies/do classification
+            p.isPlaybackOn.store(false);
             p.inputProcessor.classifyStoredHits(p.getSampleRate());
             p.buildDrumBuffer();
             p.inputProcessor.hitsToBuffer();
@@ -70,7 +71,7 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
                     << HitClassifier::toString(ch.type));
             }
 
-            recordButton.setButtonText("Recorded Thing");
+            //recordButton.setButtonText("Recorded Thing");
             addAndMakeVisible(playButton);
         }
         
@@ -79,6 +80,7 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
     
     playButton.onClick = [&]() {
         p.isPlaybackOn.store(true);
+        p.inputProcessor.reset();
         
         std::cout << p.inputProcessor.storedHitsIndex << std::endl;
         //p.inputProcessor.storedHits;
@@ -127,7 +129,7 @@ void HackBrownAudioProcessorEditor::resized()
     // subcomponents in your editor..
     setSize(1000, 700);
     recordButton.setBounds(20, 20, 170, 40);
-    playButton.setBounds(20, 150, 170, 40);
+    playButton.setBounds(20, 80, 170, 40);
     mySlider.setBounds(200, 50, 100, 200);
 }
 

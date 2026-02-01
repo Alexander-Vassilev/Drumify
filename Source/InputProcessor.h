@@ -61,7 +61,7 @@ private:
 
 
     // --- Detection parameters ---
-    static constexpr float onsetThreshold  = 0.08f;
+    static constexpr float onsetThreshold  = 0.05f;
     static constexpr float offsetThreshold = 0.04f;
     static constexpr float noveltyThreshold = 0.015f;
 
