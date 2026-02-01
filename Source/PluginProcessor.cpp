@@ -235,13 +235,18 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
     samplerSound = dynamic_cast<juce::SamplerSound*>(hat.get());
     juce::AudioBuffer<float>* hatData = samplerSound->getAudioData();
     int hatLen = hatData->getNumSamples();
+    int offset = 0;
     
-    for (DrumEventAbs event : events) {
-        DBG("in da loop");
+    if (events.size() >= 1) {
+        offset = events[0].sampleIndex;
+    }
+    
+    for (int i = 0; i < events.size() - 1; i++) {
+        DBG("num events" << events.size());
         juce::AudioBuffer<float> copier;
         bool skip = false;
         
-        switch (event.midiNote) {
+        switch (events[i].midiNote) {
             case 36:
                 copier = *kickData;
                 break;
@@ -252,13 +257,15 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
                 copier = *hatData;
                 break;
             default:
-                skip = true;
+                copier = *hatData;
+                //skip = true;
                 break;
         };
         
         if (!skip) {
-            out.copyFrom(0, event.sampleIndex, copier, 0, 0, copier.getNumSamples());
+            out.copyFrom(0, events[i].sampleIndex - offset, copier, 0, 0, copier.getNumSamples());
         }
+        DBG("copied");
     }
     
     //out.copyFrom(0, processLen, *audioData, 0, 0, processLen);
