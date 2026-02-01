@@ -138,8 +138,8 @@ void HackBrownAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
     spec.sampleRate = sampleRate;
     //spec.numChannels = numChannels;
     envelopeFollower.prepare(spec);
-    envelopeFollower.setAttackTime(15);
-    envelopeFollower.setReleaseTime(15);
+    envelopeFollower.setAttackTime(15.0f);
+    envelopeFollower.setReleaseTime(80.0f);
     sineGenerator.prepare(sampleRate, samplesPerBlock);
     
     drumSynth.clearVoices();
@@ -270,7 +270,7 @@ void HackBrownAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
             // Only process if we have a corresponding input channel
             if (channel < totalNumInputChannels) {
                 for (int sample = 0; sample < buffer.getNumSamples(); sample++) {
-                    float amp = 2 * abs(envelopeFollower.processSample(channel, inputData[sample]));
+                    float amp = envelopeFollower.processSample(channel, inputData[sample]);
                     inputProcessor.processSample(inputData[sample], amp);
                 }
             }

@@ -9,6 +9,27 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
+void saveOutput(juce::AudioBuffer<float> buff)
+{
+    juce::File outputFile("/Users/lightspark/Documents/JuceProjects/HackBrown2026/analysis1.wav");
+    
+    if (outputFile.existsAsFile()) {
+        outputFile.deleteFile();
+    }
+    
+    auto outStream = outputFile.createOutputStream();
+    
+    if (outStream != nullptr) {
+        juce::WavAudioFormat format;
+        std::unique_ptr<juce::AudioFormatWriter> writer(
+            format.createWriterFor(outStream.release(), 44100, buff.getNumChannels(), 32, {}, 0));
+        
+        if (writer != nullptr) {
+            writer->writeFromAudioSampleBuffer(buff, 0, buff.getNumSamples());
+        }
+    }
+}
+
 //==============================================================================
 HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProcessor& p)
     : AudioProcessorEditor (&p), audioProcessor (p)
@@ -53,6 +74,7 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
         std::cout << p.inputProcessor.storedHitsIndex << std::endl;
         //p.inputProcessor.storedHits;
         p.renderedTestBuffer = p.inputProcessor.hitsToBuffer();
+        saveOutput(p.renderedTestBuffer);
     };
 
     // Make sure that before the constructor has finished, you've set the

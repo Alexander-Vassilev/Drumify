@@ -9,7 +9,6 @@
 */
 
 #include "InputProcessor.h"
-#include "ClassifiedHit.h"
 #include "hitClassifier.h"
 /*
 void InputProcessor::activate() {
@@ -91,7 +90,8 @@ void InputProcessor::processSample(float sample, float amp)
             for (int i = 0; i < preRollSamples; ++i)
             {
                 int idx = (preRollIndex + i) % preRollSamples;
-                writePtr[currHitIndex++] = preRoll[idx];
+                writePtr[currHitIndex] = preRoll[idx];
+                currHitIndex++;
             }
         }
     }
@@ -99,20 +99,19 @@ void InputProcessor::processSample(float sample, float amp)
     // ===============================
     // RECORDING LOGIC
     // ===============================
-    if (isActivated)
-    {
-        if (currHitIndex < samplesPerHit)
-            writePtr[currHitIndex++] = sample;
-
+    if (isActivated) {
+        if (currHitIndex < samplesPerHit) {
+            writePtr[currHitIndex] = sample;
+            currHitIndex++;
+        }
+            
         // ===============================
         // OFFSET LOGIC (sustained below threshold)
         // ===============================
-        if (amp < offsetThreshold)
-        {
+        if (amp < offsetThreshold) {
             offsetCounter++;
 
-            if (offsetCounter >= minOffsetSamples)
-            {
+            if (offsetCounter >= minOffsetSamples) {
                 // --- Finalize hit ---
                 auto& hit = storedHits[storedHitsIndex];
                 hit.hitLength = currHitIndex;
@@ -121,9 +120,7 @@ void InputProcessor::processSample(float sample, float amp)
                 isActivated = false;
                 offsetCounter = 0;
             }
-        }
-        else
-        {
+        } else {
             offsetCounter = 0;  // Reset if amplitude goes back up
         }
     }
@@ -177,8 +174,10 @@ void InputProcessor::processSample(float sample, float amp) {
 //}
 juce::AudioBuffer<float> InputProcessor::hitsToBuffer() {
     int totalSamples = 0;
+    const int samplesBetweenHits = 40000;
+    
     for (int hit = 0; hit < storedHitsIndex; hit++) {
-        totalSamples += storedHits[hit].hitLength + 44100;  // hit + padding
+        totalSamples += storedHits[hit].hitLength + samplesBetweenHits;  // hit + padding
     }
     
     juce::AudioBuffer<float> retBuffer;
@@ -194,7 +193,7 @@ juce::AudioBuffer<float> InputProcessor::hitsToBuffer() {
             currIndex++;
         }
         
-        for (int padding = 0; padding < 44100; padding++) {
+        for (int padding = 0; padding < samplesBetweenHits; padding++) {
             retBuffWritePtr[currIndex] = 0;
             currIndex++;
         }

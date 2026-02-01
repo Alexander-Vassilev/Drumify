@@ -7,15 +7,6 @@
       <FILE id="dkEfis" name="hitClassifier.cpp" compile="1" resource="0"
             file="Source/hitClassifier.cpp"/>
       <FILE id="TJHpyS" name="hitClassifier.h" compile="0" resource="0" file="Source/hitClassifier.h"/>
-<<<<<<< HEAD
-      <FILE id="g3WqLB" name="DrumClassifier.cpp" compile="1" resource="0"
-            file="Source/DrumClassifier.cpp"/>
-      <FILE id="jgySEM" name="DrumClassifier.h" compile="0" resource="0"
-            file="Source/DrumClassifier.h"/>
-      <FILE id="sNh6HP" name="DrumClassifiertests.cpp" compile="1" resource="0"
-            file="Source/DrumClassifiertests.cpp"/>
-=======
->>>>>>> temp-branch
       <FILE id="XyR354" name="InputProcessor.cpp" compile="1" resource="0"
             file="Source/InputProcessor.cpp"/>
       <FILE id="cZlXZl" name="InputProcessor.h" compile="0" resource="0"
