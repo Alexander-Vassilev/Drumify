@@ -32,10 +32,11 @@ void InputProcessor::deactivate() {
     isActivated = false;
     currOffsetSampleCount = 0;
     isNewBuffer = true;
+    currHitIndex = 0;
 };
 
 void InputProcessor::addSample(float sample) {
-    if (currHitIndex < samplesPerHit - 5) {
+    if (currHitIndex < samplesPerHit - 1) {
         writePtr[currHitIndex] = sample;
         currHitIndex++;
     }

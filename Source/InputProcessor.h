@@ -17,6 +17,7 @@ struct MouthHit {
     int onsetSample;
     int hitLength;
     juce::AudioBuffer<float> buffer;
+    
 };
 
 class InputProcessor {
@@ -27,6 +28,8 @@ public:
     void processSample(float sample, float amp);
     void initBuffer();
     juce::AudioBuffer<float> hitsToBuffer();
+    
+    int storedHitsIndex = 0;
 private:
     static constexpr int numHits = 64;
     const int minOnsetSamples = 512;
@@ -36,7 +39,6 @@ private:
     
     std::array<MouthHit, numHits> storedHits;
     float* writePtr;
-    int storedHitsIndex = 0;
     int currHitIndex = 0;
     bool isActivated = false;
     bool isNewBuffer = true; // Creating new buffer before officially activating an onset
