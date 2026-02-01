@@ -35,6 +35,7 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
         recordButton.setButtonText("Clicked!");
         
         std::cout << p.inputProcessor.storedHitsIndex << std::endl;
+        //p.inputProcessor.storedHits;
         p.renderedTestBuffer = p.inputProcessor.hitsToBuffer();
     };
 

@@ -11,7 +11,7 @@
 #include "InputProcessor.h"
 
 
-
+/*
 void InputProcessor::activate() {
     isActivated = true;
 };
@@ -42,6 +42,94 @@ void InputProcessor::addSample(float sample) {
     }
 };
 
+*/
+
+void InputProcessor::reset()
+{
+    storedHitsIndex = 0;
+    currHitIndex = 0;
+    isActivated = false;
+    onsetCounter = 0;
+    offsetCounter = 0;
+    previousAmp = 0.0f;
+}
+
+void InputProcessor::processSample(float sample, float amp)
+{
+    if (storedHitsIndex >= numHits)
+        return;
+
+    currSample++;
+
+    // --- Update pre-roll buffer (always) ---
+    preRoll[preRollIndex] = sample;
+    preRollIndex = (preRollIndex + 1) % preRollSamples;
+
+    // --- Envelope novelty (onset emphasis) ---
+    float novelty = amp - previousAmp;
+    previousAmp = amp;
+
+    // ===============================
+    // ONSET LOGIC (simplified trigger)
+    // ===============================
+    if (!isActivated)
+    {
+        // Trigger on FIRST strong transient, not sustained signal
+        if (amp > onsetThreshold && novelty > noveltyThreshold)
+        {
+            // --- Activate hit immediately ---
+            isActivated = true;
+            currHitIndex = 0;
+
+            auto& hit = storedHits[storedHitsIndex];
+            hit.onsetSample = currSample - preRollSamples; // Account for pre-roll
+            hit.buffer.setSize(1, samplesPerHit);
+            hit.buffer.clear();
+            writePtr = hit.buffer.getWritePointer(0);
+
+            // --- Copy pre-roll ---
+            for (int i = 0; i < preRollSamples; ++i)
+            {
+                int idx = (preRollIndex + i) % preRollSamples;
+                writePtr[currHitIndex++] = preRoll[idx];
+            }
+        }
+    }
+
+    // ===============================
+    // RECORDING LOGIC
+    // ===============================
+    if (isActivated)
+    {
+        if (currHitIndex < samplesPerHit)
+            writePtr[currHitIndex++] = sample;
+
+        // ===============================
+        // OFFSET LOGIC (sustained below threshold)
+        // ===============================
+        if (amp < offsetThreshold)
+        {
+            offsetCounter++;
+
+            if (offsetCounter >= minOffsetSamples)
+            {
+                // --- Finalize hit ---
+                auto& hit = storedHits[storedHitsIndex];
+                hit.hitLength = currHitIndex;
+
+                storedHitsIndex++;
+                isActivated = false;
+                offsetCounter = 0;
+            }
+        }
+        else
+        {
+            offsetCounter = 0;  // Reset if amplitude goes back up
+        }
+    }
+}
+
+/*
 void InputProcessor::processSample(float sample, float amp) {
     if (storedHitsIndex < numHits) {
         currSample++;
@@ -74,7 +162,7 @@ void InputProcessor::processSample(float sample, float amp) {
         }
     }
 }
-
+ */
 juce::AudioBuffer<float> InputProcessor::hitsToBuffer() {
     int totalSamples = 0;
     for (int hit = 0; hit < storedHitsIndex; hit++) {
@@ -102,3 +190,4 @@ juce::AudioBuffer<float> InputProcessor::hitsToBuffer() {
     
     return retBuffer;
 };
+
