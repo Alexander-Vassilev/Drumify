@@ -23,6 +23,23 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
         if (!isOn && p.recordingStarted.load()) {
             // Call Gabe FFT Algorithm Here
             // p.startRecording();
+            if (!isOn && p.recordingStarted.load())
+            {
+                // Call Gabe FFT Algorithm Here  --> do classification instead
+                p.inputProcessor.classifyStoredHits(p.getSampleRate());
+
+                recordButton.setButtonText("Recorded Thing");
+            }
+            
+            for (int i = 0; i < p.inputProcessor.storedHitsIndex; ++i)
+            {
+                const auto& hit = p.inputProcessor.storedHits[i];
+
+                DBG("Editor sees Hit #" << i
+                    << " classified as "
+                    << HitClassifier::toString(hit.type));
+            }
+
             recordButton.setButtonText("Recorded Thing");
             
         }

@@ -10,7 +10,7 @@
 
 #include "InputProcessor.h"
 
-
+#include "HitClassifier.h"
 /*
 void InputProcessor::activate() {
     isActivated = true;
@@ -163,6 +163,18 @@ void InputProcessor::processSample(float sample, float amp) {
     }
 }
  */
+void InputProcessor::classifyStoredHits(double sampleRate)
+{
+    // storedHitsIndex is how many valid hits you have
+    for (int i = 0; i < storedHitsIndex; ++i)
+    {
+        auto& hit = storedHits[i];
+        const auto features = HitClassifier::extractFeatures(hit.buffer, hit.hitLength, sampleRate);
+        hit.type = HitClassifier::classify(features);
+
+    
+    }
+}
 juce::AudioBuffer<float> InputProcessor::hitsToBuffer() {
     int totalSamples = 0;
     for (int hit = 0; hit < storedHitsIndex; hit++) {
@@ -190,4 +202,5 @@ juce::AudioBuffer<float> InputProcessor::hitsToBuffer() {
     
     return retBuffer;
 };
+
 

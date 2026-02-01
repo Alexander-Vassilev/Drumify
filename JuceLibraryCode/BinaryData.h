@@ -8,14 +8,14 @@
 
 namespace BinaryData
 {
-    extern const char*   Snare_wav;
-    const int            Snare_wavSize = 81728;
-
     extern const char*   Hat_wav;
     const int            Hat_wavSize = 33374;
 
     extern const char*   Kick_wav;
     const int            Kick_wavSize = 43994;
+
+    extern const char*   Snare_wav;
+    const int            Snare_wavSize = 81728;
 
     // Number of elements in the namedResourceList and originalFileNames arrays.
     const int namedResourceListSize = 3;

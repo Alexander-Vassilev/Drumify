@@ -11,14 +11,16 @@
 #pragma once
 #include <array>
 #include <JuceHeader.h>
-
+#include "HitClassifier.h"
 
 struct MouthHit {
     int onsetSample;
     int hitLength;
     juce::AudioBuffer<float> buffer;
     
+    HitType type = HitType::Unknown;
 };
+
 
 class InputProcessor {
 public:
@@ -32,6 +34,9 @@ public:
     juce::AudioBuffer<float> hitsToBuffer();
     
     int storedHitsIndex = 0;
+    void classifyStoredHits(double sampleRate);
+    static constexpr int numHits = 64;
+    std::array<MouthHit, numHits> storedHits;
 private:
     /*
     static constexpr int numHits = 64;
@@ -49,7 +54,7 @@ private:
     int currOffsetSampleCount = 0;
     int currSample = 0;
      */
-    static constexpr int numHits = 64;
+
 
     // --- Detection parameters ---
     static constexpr float onsetThreshold  = 0.08f;
@@ -63,7 +68,6 @@ private:
     static constexpr int samplesPerHit   = 65536;
     static constexpr int preRollSamples  = 256;
 
-    std::array<MouthHit, numHits> storedHits;
 
     float preRoll[preRollSamples] = {};
     int preRollIndex = 0;
