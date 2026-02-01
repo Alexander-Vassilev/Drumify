@@ -21,13 +21,8 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
         recordButton.setButtonText(message);
         
         if (!isOn && p.recordingStarted.load()) {
-            // algorithm classifies
-            if (!isOn && p.recordingStarted.load())
-            {
-                //do classification
-                p.inputProcessor.classifyStoredHits(p.getSampleRate());
-                if (!isOn && p.recordingStarted.load())
-                {
+            // algorithm classifies/do classification
+
                     p.inputProcessor.classifyStoredHits(p.getSampleRate());
 
                     DBG("---- Editor sees classified hits ----");
@@ -37,11 +32,9 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
                             << " classified as "
                             << HitClassifier::toString(ch.type));
                     }
-                }
+                
 
-                recordButton.setButtonText("Recorded Thing");
-            }
-            
+
 
             recordButton.setButtonText("Recorded Thing");
             
