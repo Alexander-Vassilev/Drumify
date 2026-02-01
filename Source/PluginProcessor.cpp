@@ -8,6 +8,8 @@
 
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include <JuceHeader.h>
+//void runDrumClassifierSmokeTests();
 
 //==============================================================================
 HackBrownAudioProcessor::HackBrownAudioProcessor()
@@ -95,6 +97,13 @@ void HackBrownAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
 {
     // Use this method as the place to do any pre-playback
     // initialisation that you need..
+    //static bool ranTests = false;
+    //if (!ranTests)
+    //{
+    //    ranTests = true;
+    //    runDrumClassifierSmokeTests();
+    //}
+
     juce::dsp::ProcessSpec spec;
 
     spec.maximumBlockSize = samplesPerBlock;
@@ -104,6 +113,7 @@ void HackBrownAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
     envelopeFollower.setAttackTime(15);
     envelopeFollower.setReleaseTime(15);
     sineGenerator.prepare(sampleRate, samplesPerBlock);
+    
 }
 
 void HackBrownAudioProcessor::releaseResources()
@@ -218,3 +228,4 @@ juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
     return new HackBrownAudioProcessor();
 }
+

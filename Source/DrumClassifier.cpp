@@ -82,10 +82,14 @@ ClassifiedHit DrumClassifier::classifyAt(const float* monoSamples, int numSample
     // rule-based classification
     if (lowR > p.kickLowRatio && c < p.kickCentroidHz)
         out.cls = DrumClass::Kick;
-    else if (highR > p.hatHighRatio && c > p.hatCentroidHz)
-        out.cls = DrumClass::Hat;
     else if (midR > p.snareMidRatio && c > p.snareCentroidHz)
         out.cls = DrumClass::Snare;
+    else if (highR > p.hatHighRatio &&
+             c > p.hatCentroidHz &&
+             high > (p.hatHighOverMid * mid))
+    {
+        out.cls = DrumClass::Hat;
+    }
     else
         out.cls = DrumClass::Unknown;
 
@@ -138,4 +142,54 @@ float DrumClassifier::centroidHz() const noexcept
         den += w;
     }
     return (den > 1e-9f) ? (num / den) : 0.0f;
+}
+
+static void mixToMono(const juce::AudioBuffer<float>& in, std::vector<float>& outMono)
+{
+    const int n = in.getNumSamples();
+    const int chs = in.getNumChannels();
+
+    outMono.assign((size_t)n, 0.0f);
+    if (chs <= 0) return;
+
+    if (chs == 1)
+    {
+        const float* x = in.getReadPointer(0);
+        for (int i = 0; i < n; ++i)
+            outMono[(size_t)i] = x[i];
+        return;
+    }
+
+    for (int ch = 0; ch < chs; ++ch)
+    {
+        const float* x = in.getReadPointer(ch);
+        for (int i = 0; i < n; ++i)
+            outMono[(size_t)i] += x[i];
+    }
+
+    const float inv = 1.0f / (float)chs;
+    for (int i = 0; i < n; ++i)
+        outMono[(size_t)i] *= inv;
+}
+
+ClassifiedMouthHit DrumClassifier::classifyMouthHit(const MouthHit& hit, int onsetInHitBuffer) const
+{
+    ClassifiedMouthHit out;
+    out.onsetSample = hit.onsetSample;
+
+    const auto& buf = hit.buffer;
+    const int n = buf.getNumSamples();
+    if (n <= 0)
+        return out;
+
+    // Convert this hit's buffer to contiguous mono samples
+    std::vector<float> mono;
+    mixToMono(buf, mono);
+
+    // classify within this hit buffer (onset is usually 0 unless you have pre-roll)
+    auto res = classifyAt(mono.data(), (int)mono.size(), (int64_t)onsetInHitBuffer);
+
+    out.velocity = res.velocity;
+    out.cls = res.cls;
+    return out;
 }

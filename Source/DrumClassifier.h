@@ -34,11 +34,13 @@ struct DrumClassifierParams
     float kickLowRatio = 0.55f;
     float kickCentroidHz = 700.0f;
 
-    float hatHighRatio = 0.45f;
-    float hatCentroidHz = 3500.0f;
+    float hatHighRatio = 0.50f;
+    float hatCentroidHz = 4500.0f;
+    float hatHighOverMid = 1.80f;   // high must be >= 1.6 * mid to be a hat
 
-    float snareMidRatio = 0.35f;
-    float snareCentroidHz = 1200.0f;
+
+    float snareMidRatio = 0.30f;
+    float snareCentroidHz = 1300.0f;
 };
 struct ClassifiedMouthHit
 {
