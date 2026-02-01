@@ -50,6 +50,7 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
             // algorithm classifies/do classification
             p.inputProcessor.classifyStoredHits(p.getSampleRate());
             p.buildDrumBuffer();
+            p.inputProcessor.hitsToBuffer();
 
             DBG("---- Editor sees classified hits ----");
             for (const auto& ch : p.inputProcessor.classifiedHits) //hits are stored in inputProcessor.classifiedhits
