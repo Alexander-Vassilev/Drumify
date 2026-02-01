@@ -264,6 +264,7 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
 
         if (!skip) {
             out.copyFrom(0, events[i].sampleIndex * playbackSpeed - offset, copier, 0, 0, copier.getNumSamples());
+            out.applyGainRamp(0, events[i].sampleIndex * playbackSpeed - offset, copier.getNumSamples(), events[i].velocity01, events[i].velocity01);
         }
         DBG("copied");
     }
@@ -454,7 +455,7 @@ void HackBrownAudioProcessor::buildDrumBuffer() {
     for (auto processedHit : inputProcessor.classifiedHits) {
         lastSampleHit = processedHit.onsetSample;
         lastSize = processedHit.durationSec;
-        events.push_back({ processedHit.onsetSample, (int)processedHit.type, 1.0f }); // kick at 0s
+        events.push_back({ processedHit.onsetSample, (int)processedHit.type, processedHit.rms }); // kick at 0s
     }
 
     const int outLen = int(lastSampleHit + lastSize * sr + 100);
