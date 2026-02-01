@@ -120,6 +120,24 @@ void HackBrownAudioProcessor::loadSampleFromBinaryData (const juce::String& name
     drumSynth.addSound (sound);
 }
 
+juce::AudioBuffer<float> loadAudioFile(const juce::File& file) {
+    juce::AudioFormatManager formatManager;
+    formatManager.registerBasicFormats();
+    
+    std::unique_ptr<juce::AudioFormatReader> reader(
+        formatManager.createReaderFor(file));
+    
+    if (reader != nullptr)
+    {
+        juce::AudioBuffer<float> buffer(reader->numChannels,
+                                       (int)reader->lengthInSamples);
+        reader->read(&buffer, 0, (int)reader->lengthInSamples, 0, true, true);
+        return buffer;
+    }
+    
+    return juce::AudioBuffer<float>();
+}
+
 //==============================================================================
 void HackBrownAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
@@ -195,12 +213,54 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
     double sampleRate,
     int outputNumSamples)
 {
-    // Ensure synth is configured
-    drumSynth.setCurrentPlaybackSampleRate(sampleRate);
-
     juce::AudioBuffer<float> out;
     out.setSize(2, outputNumSamples);
     out.clear();
+    
+    juce::SynthesiserSound::Ptr kick = drumSynth.getSound(0);
+    auto* samplerSound = dynamic_cast<juce::SamplerSound*>(kick.get());
+    juce::AudioBuffer<float>* kickData = samplerSound->getAudioData();
+    int kickLen = kickData->getNumSamples();
+    
+    juce::SynthesiserSound::Ptr snare = drumSynth.getSound(1);
+    samplerSound = dynamic_cast<juce::SamplerSound*>(snare.get());
+    juce::AudioBuffer<float>* snareData = samplerSound->getAudioData();
+    int snareLen = snareData->getNumSamples();
+    
+    juce::SynthesiserSound::Ptr hat = drumSynth.getSound(2);
+    samplerSound = dynamic_cast<juce::SamplerSound*>(hat.get());
+    juce::AudioBuffer<float>* hatData = samplerSound->getAudioData();
+    int hatLen = hatData->getNumSamples();
+    
+    for (DrumEventAbs event : events) {
+        juce::AudioBuffer<float> copier;
+        
+        switch (event.midiNote) {
+            case 36:
+                copier = *kickData;
+                break;
+            case 38:
+                copier = *snareData;
+                break;
+            case 42:
+                copier = *hatData;
+                break;
+        };
+        
+        out.copyFrom(0, event.sampleIndex, copier, 0, 0, copier.getNumSamples());
+    }
+    
+    //out.copyFrom(0, processLen, *audioData, 0, 0, processLen);
+    //out.clear(0, 2 * processLen, outputNumSamples - 2 * processLen);
+    
+    return out;
+    //auto* snare = drumSynth.getSound(1);
+    //auto* hat = drumSynth.getSound(2);
+    
+    
+    // Ensure synth is configured
+    /*
+    drumSynth.setCurrentPlaybackSampleRate(sampleRate);
 
     // Build a global MIDI timeline (absolute sample positions)
     juce::MidiBuffer globalMidi;
@@ -221,7 +281,10 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
     // Render in chunks
     const int blockSize = 512;
     juce::MidiBuffer blockMidi;
-
+    
+    DBG("outputNumSamples " << outputNumSamples);
+    DBG("blockSize " << blockSize);
+    
     for (int pos = 0; pos < outputNumSamples; pos += blockSize)
     {
         const int numThisBlock = juce::jmin(blockSize, outputNumSamples - pos);
@@ -237,10 +300,19 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
             }
         }
 
-        drumSynth.renderNextBlock(out, blockMidi, pos, numThisBlock);
+        for (const auto metadata : blockMidi)
+        {
+            auto message = metadata.getMessage();
+            DBG("Sample: " << metadata.samplePosition
+                << " Note: " << message.getNoteNumber()
+                << " Velocity: " << message.getVelocity()
+                << " Is NoteOn: " << (int)message.isNoteOn());
+        }
+        drumSynth.renderNextBlock(out, blockMidi, 100, numThisBlock);
     }
 
     return out;
+     */
 }
 
 
@@ -283,11 +355,13 @@ void HackBrownAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
         buffer.clear();
     } else if (isPlaybackOn.load()) {
         buffer.clear();
+        //juce::AudioBuffer<float>& readBuff;
+        
         const int numSamples = buffer.getNumSamples();
-        const int remaining = renderedTestBuffer.getNumSamples() - renderedReadPos;
+        const int remaining = renderedDrumBuffer.getNumSamples() - renderedReadPos;
         const int toCopy = juce::jmin(numSamples, remaining);
 
-        auto* inputData = renderedTestBuffer.getReadPointer(0);
+        auto* inputData = renderedDrumBuffer.getReadPointer(0);
 
         for (int ch = 0; ch < buffer.getNumChannels(); ++ch) {
             //buffer.copyFrom(ch, 0, renderedDrumBuffer, juce::jmin(ch, renderedDrumBuffer.getNumChannels()-1),
@@ -305,7 +379,7 @@ void HackBrownAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
         renderedReadPos += toCopy;
 
-        if (renderedReadPos >= renderedTestBuffer.getNumSamples()) {
+        if (renderedReadPos >= renderedDrumBuffer.getNumSamples()) {
             isPlayingRendered = false;
             isPlaybackOn.store(false);
             renderedReadPos = 0;
@@ -355,9 +429,11 @@ void HackBrownAudioProcessor::makeTestRender()
     std::vector<DrumEventAbs> events;
 
     const double sr = currentSampleRate;
-    events.push_back({ int(0.0 * sr),                 36, 1.0f }); // kick at 0s
-    //events.push_back({ int(0.5 * sr),     38, 0.9f }); // snare at 0.5s
-    //events.push_back({ int(1.0 * sr),     42, 0.7f }); // hat at 1.0s
+    events.push_back({ int(0.0 * sr),     36, 1.0f }); // kick at 0s
+    events.push_back({ int(0.5 * sr),     38, 1.0f }); // snare at 0.5s
+    events.push_back({ int(1.0 * sr),     36, 1.0f }); // kick at 0s
+    events.push_back({ int(0.25 * sr),     42, 1.0f }); // hat at 1.0s
+    events.push_back({ int(0.75 * sr),     42, 1.0f }); // hat at 1.0s
 
     const int outLen = int(2.5 * sr); // 1.5s output
     renderedDrumBuffer = renderDrumLoopOffline(events, sr, outLen);
