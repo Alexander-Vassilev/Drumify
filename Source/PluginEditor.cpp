@@ -14,14 +14,32 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
     : AudioProcessorEditor (&p), audioProcessor (p)
 {
     recordButton.setClickingTogglesState(true);
+    
     recordButton.onClick = [&]() {
+        bool isOn = recordButton.getToggleState();
         const auto message = recordButton.getToggleState() ? "Recording!" : "Record";
         recordButton.setButtonText(message);
+        
+        if (!isOn && p.recordingStarted.load()) {
+            // Call Gabe FFT Algorithm Here
+            // p.startRecording();
+            recordButton.setButtonText("Recorded Thing");
+            
+        }
+        
+        p.recordingEnabled.store(!isOn);
+    };
+    
+    playButton.onClick = [&]() {
+        p.isPlaybackOn.store(true);
+        recordButton.setButtonText("Clicked!");
+        p.renderedTestBuffer = p.inputProcessor.hitsToBuffer();
     };
 
     // Make sure that before the constructor has finished, you've set the
     // editor's size to whatever you need it to be.
     addAndMakeVisible(recordButton);
+    addAndMakeVisible(playButton);
     setSize (400, 300);
 }
 
@@ -45,5 +63,6 @@ void HackBrownAudioProcessorEditor::resized()
     // This is generally where you'll want to lay out the positions of any
     // subcomponents in your editor..
     recordButton.setBounds(20, 20, 100, 30);
+    playButton.setBounds(20, 60, 100, 30);
 }
 

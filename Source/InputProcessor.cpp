@@ -21,13 +21,14 @@ void InputProcessor::initBuffer() {
         storedHits[storedHitsIndex].onsetSample = currSample;
         storedHits[storedHitsIndex].buffer.setSize(1, samplesPerHit);
         writePtr = storedHits[storedHitsIndex].buffer.getWritePointer(0);
-        storedHitsIndex++;
         currOnsetSampleCount = 0;
         isNewBuffer = false;
     }
 }
 
 void InputProcessor::deactivate() {
+    storedHits[storedHitsIndex].hitLength = currHitIndex;
+    storedHitsIndex++;
     isActivated = false;
     currOffsetSampleCount = 0;
     isNewBuffer = true;
@@ -72,3 +73,31 @@ void InputProcessor::processSample(float sample, float amp) {
         }
     }
 }
+
+juce::AudioBuffer<float> InputProcessor::hitsToBuffer() {
+    int totalSamples = 0;
+    for (int hit = 0; hit < storedHitsIndex; hit++) {
+        totalSamples += storedHits[hit].hitLength + 44100;  // hit + padding
+    }
+    
+    juce::AudioBuffer<float> retBuffer;
+    retBuffer.setSize(1, totalSamples);
+    float* retBuffWritePtr = retBuffer.getWritePointer(0);
+    int currIndex = 0;
+    
+    for (int hit = 0; hit < storedHitsIndex; hit++) {
+        auto* readPtr = storedHits[hit].buffer.getReadPointer(0);
+        
+        for (int sample = 0; sample < storedHits[hit].hitLength; sample++) {
+            retBuffWritePtr[currIndex] = readPtr[sample];
+            currIndex++;
+        }
+        
+        for (int padding = 0; padding < 44100; padding++) {
+            retBuffWritePtr[currIndex] = 0;
+            currIndex++;
+        }
+    }
+    
+    return retBuffer;
+};
