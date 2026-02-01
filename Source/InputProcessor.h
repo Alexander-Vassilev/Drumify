@@ -14,6 +14,7 @@
 
 struct MouthHit {
     int onsetSample;
+    int hitLength;
     juce::AudioBuffer<float> buffer;
 };
 
@@ -24,6 +25,7 @@ public:
     void addSample(float sample);
     void processSample(float sample, float amp);
     void initBuffer();
+    juce::AudioBuffer<float> hitsToBuffer();
 private:
     static constexpr int numHits = 64;
     const int minOnsetSamples = 512;

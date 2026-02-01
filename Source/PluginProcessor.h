@@ -57,11 +57,13 @@ public:
     void setStateInformation (const void* data, int sizeInBytes) override;
     
     std::atomic<bool> recordingEnabled { false };
-
+    std::atomic<bool> recordingStarted { false };
+    std::atomic<bool> isPlaybackOn { false };
+    juce::AudioBuffer<float> renderedTestBuffer;
+    InputProcessor inputProcessor;
 private:
     juce::dsp::BallisticsFilter<float> envelopeFollower;
     SineGenerator sineGenerator;
-    InputProcessor inputProcessor;
 
     double currentSampleRate = 44100.0;
 
@@ -90,7 +92,7 @@ private:
     // Rendered playback state
     juce::AudioBuffer<float> renderedDrumBuffer;
     int renderedReadPos = 0;
-    bool isPlayingRendered = true;
+    bool isPlayingRendered = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HackBrownAudioProcessor)
 };

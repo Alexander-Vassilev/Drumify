@@ -29,6 +29,7 @@ private:
     // access the processor object that created it.
     HackBrownAudioProcessor& audioProcessor;
     juce::TextButton recordButton { "Record" };
+    juce::TextButton playButton { "Playback" };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HackBrownAudioProcessorEditor)
 };
