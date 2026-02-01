@@ -9,8 +9,8 @@
 */
 
 #include "InputProcessor.h"
-
-#include "HitClassifier.h"
+#include "ClassifiedHit.h"
+#include "hitClassifier.h"
 /*
 void InputProcessor::activate() {
     isActivated = true;
@@ -163,18 +163,18 @@ void InputProcessor::processSample(float sample, float amp) {
     }
 }
  */
-void InputProcessor::classifyStoredHits(double sampleRate)
-{
+//void InputProcessor::classifyStoredHits(double sampleRate)
+//{
     // storedHitsIndex is how many valid hits you have
-    for (int i = 0; i < storedHitsIndex; ++i)
-    {
-        auto& hit = storedHits[i];
-        const auto features = HitClassifier::extractFeatures(hit.buffer, hit.hitLength, sampleRate);
-        hit.type = HitClassifier::classify(features);
+//    for (int i = 0; i < storedHitsIndex; ++i)
+ //   {
+ //       auto& hit = storedHits[i];
+ //       const auto features = HitClassifier::extractFeatures(hit.buffer, hit.hitLength, sampleRate);
+ //       hit.type = HitClassifier::classify(features);
 
     
-    }
-}
+ //   }
+//}
 juce::AudioBuffer<float> InputProcessor::hitsToBuffer() {
     int totalSamples = 0;
     for (int hit = 0; hit < storedHitsIndex; hit++) {
@@ -203,4 +203,35 @@ juce::AudioBuffer<float> InputProcessor::hitsToBuffer() {
     return retBuffer;
 };
 
+void InputProcessor::classifyStoredHits(double sampleRate)
+{
+    classifiedHits.clear();
+    classifiedHits.reserve(storedHitsIndex);
 
+    //DBG("---- Classifying Stored Hits ----");
+
+    for (int i = 0; i < storedHitsIndex; ++i)
+    {
+        const auto& hit = storedHits[i];
+
+        const auto features =
+            HitClassifier::extractFeatures(hit.buffer, hit.hitLength, sampleRate);
+
+        ClassifiedHit classified;
+        classified.hitIndex = i;
+        classified.type = HitClassifier::classify(features);
+        classified.rms = features.rms;
+        classified.zcr = features.zcr;
+        classified.durationSec = features.durationSec;
+
+        classifiedHits.push_back(classified);
+
+        //DBG("Hit #" << i
+         //   << " -> " << HitClassifier::toString(classified.type)
+        //    << " | RMS=" << classified.rms
+        //    << " ZCR=" << classified.zcr
+       //     << " Dur=" << classified.durationSec << "s");
+    }
+
+    //DBG("---- Classification Complete ----");
+}

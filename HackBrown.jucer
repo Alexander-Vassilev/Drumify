@@ -9,6 +9,7 @@
       <FILE id="ITZYEu" name="Snare.wav" compile="0" resource="1" file="DrumSamples/Snare.wav"/>
     </GROUP>
     <GROUP id="{14C3BC7E-3FBE-C008-1AB6-8469D98A27DE}" name="Source">
+      <FILE id="WoP0dO" name="classifiedHit.h" compile="0" resource="0" file="Source/classifiedHit.h"/>
       <FILE id="QMJocT" name="hitClassifier.cpp" compile="1" resource="0"
             file="Source/hitClassifier.cpp"/>
       <FILE id="HcMras" name="hitClassifier.h" compile="0" resource="0" file="Source/hitClassifier.h"/>

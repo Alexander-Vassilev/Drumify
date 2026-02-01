@@ -11,8 +11,9 @@
 #pragma once
 #include <array>
 #include <JuceHeader.h>
-#include "HitClassifier.h"
-
+#include "hitClassifier.h"
+#include "classifiedHit.h"
+#include <vector>
 struct MouthHit {
     int onsetSample;
     int hitLength;
@@ -37,6 +38,8 @@ public:
     void classifyStoredHits(double sampleRate);
     static constexpr int numHits = 64;
     std::array<MouthHit, numHits> storedHits;
+    // Results live here:
+    std::vector<ClassifiedHit> classifiedHits;
 private:
     /*
     static constexpr int numHits = 64;
