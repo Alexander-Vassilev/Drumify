@@ -30,7 +30,9 @@ private:
     HackBrownAudioProcessor& audioProcessor;
     juce::TextButton recordButton { "Record" };
     juce::TextButton playButton { "Playback" };
-    juce::Image background; 
+    juce::Image background;
+    juce::Slider mySlider;
+    juce::Label myLabel;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HackBrownAudioProcessorEditor)
 };

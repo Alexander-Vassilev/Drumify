@@ -238,7 +238,7 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
     int offset = 0;
 
     if (events.size() >= 1) {
-        offset = events[0].sampleIndex;
+        offset = events[0].sampleIndex * playbackSpeed;
     }
     
     for (int i = 0; i < events.size(); i++) {
@@ -263,7 +263,7 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
         };
 
         if (!skip) {
-            out.copyFrom(0, events[i].sampleIndex - offset, copier, 0, 0, copier.getNumSamples());
+            out.copyFrom(0, events[i].sampleIndex * playbackSpeed - offset, copier, 0, 0, copier.getNumSamples());
         }
         DBG("copied");
     }

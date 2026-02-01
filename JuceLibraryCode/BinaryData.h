@@ -8,14 +8,14 @@
 
 namespace BinaryData
 {
+    extern const char*   morning_png;
+    const int            morning_pngSize = 1979627;
+
     extern const char*   Hat_wav;
     const int            Hat_wavSize = 33374;
 
     extern const char*   Kick_wav;
     const int            Kick_wavSize = 43994;
-
-    extern const char*   morning_png;
-    const int            morning_pngSize = 2105090;
 
     extern const char*   Snare_wav;
     const int            Snare_wavSize = 81728;

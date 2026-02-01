@@ -36,8 +36,33 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
 {
     background = juce::ImageCache::getFromMemory (BinaryData::morning_png,
                                              BinaryData::morning_pngSize);
+    
+    // Configure slider
+    //addAndMakeVisible(mySlider);
+    mySlider.setSliderStyle(juce::Slider::LinearVertical);  // or LinearHorizontal, Rotary, etc.
+    mySlider.setRange(0.2, 1.3);         // Min and max values
+    mySlider.setValue(0.7);              // Initial value
+    mySlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 80, 20);
+    
+    // Add label (optional)
+    //addAndMakeVisible(myLabel);
+    myLabel.setText("Volume", juce::dontSendNotification);
+    myLabel.attachToComponent(&mySlider, false);  // Attach above slider
+    
     recordButton.setClickingTogglesState(true);
     recordButton.setToggleState(false, juce::dontSendNotification);
+    
+    // Set callback
+    mySlider.onValueChange = [&, this] {
+        float value = mySlider.getValue();
+        // Do something with the value
+        p.playbackSpeed = value;
+        bool isOn = recordButton.getToggleState();
+        
+        if (!isOn && p.recordingStarted.load()) {
+            p.buildDrumBuffer();
+        }
+    };
     
     recordButton.onClick = [&]() {
         bool isOn = recordButton.getToggleState();
@@ -108,16 +133,8 @@ void HackBrownAudioProcessorEditor::paint (juce::Graphics& g)
         g.setColour (juce::Colours::white.withAlpha(0.9f));
         juce::Font font ("Calibri", 50.0f, juce::Font::bold);
         g.setFont (font);
-        g.drawFittedText ("DRUMIFY", getLocalBounds(), juce::Justification::centred, 1);
+        //g.drawFittedText ("DRUMIFY", getLocalBounds(), juce::Justification::centred, 1);
  
-    } else 
-    {
-    g.fillAll (getLookAndFeel().findColour (juce::ResizableWindow::backgroundColourId));
-
-    g.setColour (juce::Colours::white.withAlpha(0.9f));
-    juce::Font font ("Orbitron", 32.0f, juce::Font::plain);
-    g.setFont (font);
-    g.drawFittedText ("RetroRhythm", getLocalBounds(), juce::Justification::centred, 1);
     }
 }
 
@@ -126,7 +143,8 @@ void HackBrownAudioProcessorEditor::resized()
     // This is generally where you'll want to lay out the positions of any
     // subcomponents in your editor..
     setSize(1000, 700);
-    recordButton.setBounds(20, 20, 100, 30);
-    playButton.setBounds(20, 60, 100, 30);
+    recordButton.setBounds(20, 20, 170, 40);
+    playButton.setBounds(20, 150, 170, 40);
+    mySlider.setBounds(200, 50, 100, 200);
 }
 

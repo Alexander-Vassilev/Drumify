@@ -62,6 +62,7 @@ public:
     std::atomic<bool> isPlaybackOn { false };
     juce::AudioBuffer<float> renderedTestBuffer;
     InputProcessor inputProcessor;
+    float playbackSpeed = 0.5;
 private:
     juce::dsp::BallisticsFilter<float> envelopeFollower;
     SineGenerator sineGenerator;
