@@ -37,12 +37,6 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
     background = juce::ImageCache::getFromMemory (BinaryData::morning_png,
                                              BinaryData::morning_pngSize);
     
-    // Configure slider
-    //addAndMakeVisible(mySlider);
-    mySlider.setSliderStyle(juce::Slider::LinearVertical);  // or LinearHorizontal, Rotary, etc.
-    mySlider.setRange(0.2, 1.3);         // Min and max values
-    mySlider.setValue(0.7);              // Initial value
-    mySlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 80, 20);
     
     // Add label (optional)
     //addAndMakeVisible(myLabel);
@@ -52,17 +46,6 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
     recordButton.setClickingTogglesState(true);
     recordButton.setToggleState(false, juce::dontSendNotification);
     
-    // Set callback
-    mySlider.onValueChange = [&, this] {
-        float value = mySlider.getValue();
-        // Do something with the value
-        p.playbackSpeed = value;
-        bool isOn = recordButton.getToggleState();
-        
-        if (!isOn && p.recordingStarted.load()) {
-            p.buildDrumBuffer();
-        }
-    };
     
     recordButton.onClick = [&]() {
         bool isOn = recordButton.getToggleState();
