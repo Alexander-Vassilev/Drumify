@@ -95,13 +95,16 @@ void HackBrownAudioProcessor::changeProgramName (int index, const juce::String& 
 
 //==============================================================================
 //the function that wraps BinaryData in a MemoryInputStream
-void HackBrownAudioProcessor::loadSampleFromBinaryData (const juce::String& name, const void* data, int dataSize, int midiNote) 
+void HackBrownAudioProcessor::loadSampleFromBinaryData (const juce::String& name, const void* data, int dataSize, int midiNote)
 {
     auto stream = std::make_unique<juce::MemoryInputStream>(data, (size_t) dataSize, false);
     std::unique_ptr<juce::AudioFormatReader> reader (formatManager.createReaderFor (std::move(stream)));
 
     if (reader == nullptr)
+    {
+        juce::Logger::writeToLog("FAILED to load sample: " + name);
         return;
+    }
 
     juce::BigInteger noteRange;
     noteRange.setBit (midiNote);
@@ -151,9 +154,9 @@ void HackBrownAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
 
     drumSynth.clearSounds();
     
-    loadSampleFromBinaryData ("Kick",  BinaryData::kick_wav,  BinaryData::kick_wavSize,  36);
-    loadSampleFromBinaryData ("Snare", BinaryData::snare_wav, BinaryData::snare_wavSize, 38);
-    loadSampleFromBinaryData ("Hat",   BinaryData::hat_wav,   BinaryData::hat_wavSize,   42);
+    loadSampleFromBinaryData ("Kick",  BinaryData::Kick_wav,  BinaryData::Kick_wavSize,  36);
+    loadSampleFromBinaryData ("Snare", BinaryData::Snare_wav, BinaryData::Snare_wavSize, 38);
+    loadSampleFromBinaryData ("Hat",   BinaryData::Hat_wav,   BinaryData::Hat_wavSize,   42);
     currentSampleRate = sampleRate;
     makeTestRender(); //TEMP, remove it later!!
 }
@@ -190,51 +193,205 @@ bool HackBrownAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts
 }
 #endif
 
+//the very original version which uses global MIDI buffer
+// juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
+//    const std::vector<DrumEventAbs>& events,
+//    double sampleRate,
+//    int outputNumSamples)
+//{
+//    // Ensure synth is configured
+//    drumSynth.setCurrentPlaybackSampleRate(sampleRate);
+//
+//    juce::AudioBuffer<float> out;
+//    out.setSize(2, outputNumSamples);
+//    out.clear();
+//
+//    // Build a global MIDI timeline (absolute sample positions)
+//    juce::MidiBuffer globalMidi;
+//    const int noteOffDelay = int(0.05 * sampleRate); // 50ms
+//
+//    for (const auto& e : events)
+//    {
+//        auto on = juce::MidiMessage::noteOn(
+//            1, e.midiNote,
+//            (juce::uint8) juce::jlimit(1, 127, int(e.velocity01 * 127.0f))
+//        );
+//        auto off = juce::MidiMessage::noteOff(1, e.midiNote);
+//
+//        globalMidi.addEvent(on, e.sampleIndex);
+//        globalMidi.addEvent(off, e.sampleIndex + noteOffDelay);
+//    }
+//
+//    // Render in chunks
+//    const int blockSize = 512;
+//    juce::MidiBuffer blockMidi;
+//
+//    for (int pos = 0; pos < outputNumSamples; pos += blockSize)
+//    {
+//        const int numThisBlock = juce::jmin(blockSize, outputNumSamples - pos);
+//        blockMidi.clear();
+//
+//        // Copy events that fall inside [pos, pos+numThisBlock) into blockMidi with relative offsets
+//        for (const auto metadata : globalMidi)
+//        {
+//            const int eventSample = metadata.samplePosition;
+//            if (eventSample >= pos && eventSample < pos + numThisBlock)
+//            {
+//                auto msg = metadata.getMessage();
+//                msg.setTimeStamp(0);
+//                blockMidi.addEvent(msg, eventSample - pos);
+//                blockMidi.addEvent(metadata.getMessage(), eventSample - pos);
+//            }
+//        }
+//
+//        drumSynth.renderNextBlock(out, blockMidi, pos, numThisBlock);
+//    }
+//
+//    return out;
+//}
+
+//the second version which sets note-off messages time-stamp to 0
+// juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
+//    const std::vector<DrumEventAbs>& events,
+//    double sampleRate,
+//    int outputNumSamples)
+//{
+//    drumSynth.setCurrentPlaybackSampleRate(sampleRate);
+//
+//    juce::AudioBuffer<float> out;
+//    out.setSize(2, outputNumSamples);
+//    out.clear();
+//
+//    juce::MidiBuffer globalMidi;
+//    const int noteOffDelay = int(0.05 * sampleRate);
+//
+//    for (const auto& e : events)
+//    {
+//        if (e.sampleIndex < 0 || e.sampleIndex >= outputNumSamples)
+//            continue;
+//
+//        auto on = juce::MidiMessage::noteOn(
+//            1, e.midiNote,
+//            (juce::uint8)juce::jlimit(1, 127, int(e.velocity01 * 127.0f))
+//        );
+//        on.setTimeStamp(0);
+//
+//        globalMidi.addEvent(on, e.sampleIndex);
+//
+//        const int offPos = e.sampleIndex + noteOffDelay;
+//        if (offPos < outputNumSamples)
+//        {
+//            auto off = juce::MidiMessage::noteOff(1, e.midiNote);
+//            off.setTimeStamp(0);
+//            globalMidi.addEvent(off, offPos);
+//        }
+//    }
+//
+//    const int blockSize = 512;
+//    juce::MidiBuffer blockMidi;
+//
+//    for (int pos = 0; pos < outputNumSamples; pos += blockSize)
+//    {
+//        const int numThisBlock = juce::jmin(blockSize, outputNumSamples - pos);
+//        blockMidi.clear();
+//
+//        for (const auto metadata : globalMidi)
+//        {
+//            const int eventSample = metadata.samplePosition;
+//            if (eventSample >= pos && eventSample < pos + numThisBlock)
+//            {
+//                auto msg = metadata.getMessage();
+//                msg.setTimeStamp(0);
+//                blockMidi.addEvent(msg, eventSample - pos);
+//            }
+//        }
+//
+//        drumSynth.renderNextBlock(out, blockMidi, pos, numThisBlock);
+//    }
+//
+//    return out;
+//}
+
+//the third version which sorts events and schedules note-ons and note-offs per block
 juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
     const std::vector<DrumEventAbs>& events,
     double sampleRate,
     int outputNumSamples)
 {
-    // Ensure synth is configured
     drumSynth.setCurrentPlaybackSampleRate(sampleRate);
 
     juce::AudioBuffer<float> out;
     out.setSize(2, outputNumSamples);
     out.clear();
 
-    // Build a global MIDI timeline (absolute sample positions)
-    juce::MidiBuffer globalMidi;
-    const int noteOffDelay = int(0.05 * sampleRate); // 50ms
+    // Sort events by time to guarantee correct scheduling
+    std::vector<DrumEventAbs> sorted = events;
+    std::sort(sorted.begin(), sorted.end(),
+        [](const auto& a, const auto& b) { return a.sampleIndex < b.sampleIndex; });
 
-    for (const auto& e : events)
-    {
-        auto on = juce::MidiMessage::noteOn(
-            1, e.midiNote,
-            (juce::uint8) juce::jlimit(1, 127, int(e.velocity01 * 127.0f))
-        );
-        auto off = juce::MidiMessage::noteOff(1, e.midiNote);
-
-        globalMidi.addEvent(on, e.sampleIndex);
-        globalMidi.addEvent(off, e.sampleIndex + noteOffDelay);
-    }
-
-    // Render in chunks
     const int blockSize = 512;
+    const int noteOffDelay = int(0.05 * sampleRate);
+
     juce::MidiBuffer blockMidi;
+
+    size_t i = 0; // cursor into sorted events
+
+    // We'll keep a tiny list of pending note-offs that land in later blocks
+    struct PendingOff { int sampleIndex; int midiNote; };
+    std::vector<PendingOff> pending;
 
     for (int pos = 0; pos < outputNumSamples; pos += blockSize)
     {
         const int numThisBlock = juce::jmin(blockSize, outputNumSamples - pos);
+        const int blockEnd = pos + numThisBlock;
+
         blockMidi.clear();
 
-        // Copy events that fall inside [pos, pos+numThisBlock) into blockMidi with relative offsets
-        for (const auto metadata : globalMidi)
+        // 1) Emit any pending note-offs that fall inside this block
+        for (int p = (int)pending.size() - 1; p >= 0; --p)
         {
-            const int eventSample = metadata.samplePosition;
-            if (eventSample >= pos && eventSample < pos + numThisBlock)
+            const int offPos = pending[p].sampleIndex;
+            if (offPos >= pos && offPos < blockEnd)
             {
-                blockMidi.addEvent(metadata.getMessage(), eventSample - pos);
+                auto off = juce::MidiMessage::noteOff(1, pending[p].midiNote);
+                off.setTimeStamp(0);
+                blockMidi.addEvent(off, offPos - pos);
+                pending.erase(pending.begin() + p);
             }
+        }
+
+        // 2) Emit note-ons for events whose time is inside this block
+        while (i < sorted.size() && sorted[i].sampleIndex < blockEnd)
+        {
+            const auto& e = sorted[i];
+
+            if (e.sampleIndex >= pos && e.sampleIndex < blockEnd
+                && e.sampleIndex >= 0 && e.sampleIndex < outputNumSamples)
+            {
+                auto on = juce::MidiMessage::noteOn(
+                    1, e.midiNote,
+                    (juce::uint8)juce::jlimit(1, 127, int(e.velocity01 * 127.0f)));
+                on.setTimeStamp(0);
+                blockMidi.addEvent(on, e.sampleIndex - pos);
+
+                const int offPos = e.sampleIndex + noteOffDelay;
+                if (offPos < outputNumSamples)
+                {
+                    // if off is in this block, add now; else queue it
+                    if (offPos < blockEnd)
+                    {
+                        auto off = juce::MidiMessage::noteOff(1, e.midiNote);
+                        off.setTimeStamp(0);
+                        blockMidi.addEvent(off, offPos - pos);
+                    }
+                    else
+                    {
+                        pending.push_back({ offPos, e.midiNote });
+                    }
+                }
+            }
+
+            ++i;
         }
 
         drumSynth.renderNextBlock(out, blockMidi, pos, numThisBlock);
@@ -243,34 +400,81 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
     return out;
 }
 
+void HackBrownAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages) {
+    if (recordingEnabled.load()) {
+        isPlayingRendered = true;
+        recordingStarted.store(true);
+        juce::ScopedNoDenormals noDenormals;
+        auto totalNumInputChannels = getTotalNumInputChannels();
+        auto totalNumOutputChannels = getTotalNumOutputChannels();
 
-void HackBrownAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
-{
-   if (isPlayingRendered)
-{
-    buffer.clear();
-    const int numSamples = buffer.getNumSamples();
-    const int remaining = renderedDrumBuffer.getNumSamples() - renderedReadPos;
-    const int toCopy = juce::jmin(numSamples, remaining);
+        for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
+            buffer.clear(i, 0, buffer.getNumSamples());
 
-    for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
-        buffer.copyFrom(ch, 0, renderedDrumBuffer, juce::jmin(ch, renderedDrumBuffer.getNumChannels()-1),
-                        renderedReadPos, toCopy);
 
-    renderedReadPos += toCopy;
+        for (int channel = 0; channel < totalNumInputChannels; ++channel)
+        {
+            auto* channelData = buffer.getWritePointer(channel);
+            juce::ignoreUnused(channelData);
+        }
 
-    if (renderedReadPos >= renderedDrumBuffer.getNumSamples())
-    {
-        isPlayingRendered = false;
-        renderedReadPos = 0;
+        auto* inputData = buffer.getReadPointer(0);
+
+        for (int channel = 0; channel < totalNumOutputChannels; ++channel) {
+            float* channelData = buffer.getWritePointer(channel);
+
+            // Only process if we have a corresponding input channel
+            if (channel < totalNumInputChannels) {
+                for (int sample = 0; sample < buffer.getNumSamples(); sample++) {
+                    float amp = 2 * abs(envelopeFollower.processSample(channel, inputData[sample]));
+                    inputProcessor.processSample(inputData[sample], amp);
+                }
+            }
+            else {
+                // Clear any extra output channels
+                buffer.clear(channel, 0, buffer.getNumSamples());
+            }
+        }
+
+        buffer.clear();
     }
+    else if (isPlaybackOn.load()) {
+        buffer.clear();
+        const int numSamples = buffer.getNumSamples();
+        const int remaining = renderedTestBuffer.getNumSamples() - renderedReadPos;
+        const int toCopy = juce::jmin(numSamples, remaining);
 
-    midiMessages.clear();
-    return;
+        auto* inputData = renderedTestBuffer.getReadPointer(0);
+
+        for (int ch = 0; ch < buffer.getNumChannels(); ++ch) {
+            //buffer.copyFrom(ch, 0, renderedDrumBuffer, juce::jmin(ch, renderedDrumBuffer.getNumChannels()-1),
+            //                renderedReadPos, toCopy);
+            float* channelData = buffer.getWritePointer(ch);
+
+            for (int sample = 0; sample < toCopy; sample++) {
+                channelData[sample] = inputData[sample + renderedReadPos];
+            }
+
+            for (int sample = toCopy; sample < buffer.getNumSamples(); sample++) {
+                channelData[sample] = 0.0f;
+            }
+        }
+
+        renderedReadPos += toCopy;
+
+        if (renderedReadPos >= renderedTestBuffer.getNumSamples()) {
+            isPlayingRendered = false;
+            isPlaybackOn.store(false);
+            renderedReadPos = 0;
+        }
+
+        midiMessages.clear();
+        return;
+    }
+    else {
+        buffer.clear();
+    }
 }
-
-}
-
 //==============================================================================
 bool HackBrownAudioProcessor::hasEditor() const
 {
@@ -308,14 +512,30 @@ void HackBrownAudioProcessor::makeTestRender()
     std::vector<DrumEventAbs> events;
 
     const double sr = currentSampleRate;
-    events.push_back({ 0,                 36, 1.0f }); // kick at 0s
+    events.clear();
+    events.push_back({ int(0.0 * sr),                 36, 1.0f }); // kick at 0s
     events.push_back({ int(0.5 * sr),     38, 0.9f }); // snare at 0.5s
     events.push_back({ int(1.0 * sr),     42, 0.7f }); // hat at 1.0s
 
-    const int outLen = int(1.5 * sr); // 1.5s output
+    const int outLen = int(2.5 * sr); // 1.5s output
+    
     renderedDrumBuffer = renderDrumLoopOffline(events, sr, outLen);
 
     renderedReadPos = 0;
-    isPlayingRendered = true;
 }
 
+//single test
+// void HackBrownAudioProcessor::makeTestRender()
+//// {
+//    std::vector<DrumEventAbs> events;
+//    const double sr = currentSampleRate;
+//    events.clear();
+//    events.push_back({ 1, 42, 1.0f }); // SNARE ONLY at 0
+//
+//    const int outLen = int(0.5 * sr);
+//    renderedDrumBuffer = renderDrumLoopOffline(events, sr, outLen);
+//
+//    renderedReadPos = 0;
+//    isPlayingRendered = true;
+//}
+//
