@@ -65,6 +65,9 @@ public:
     
     void loadSampleFromFile (const juce::File& file, int midiNote);
     std::unique_ptr<juce::AudioFormatReader> createReaderForFile (const juce::File& file);
+    void processUploadedLoop(const juce::File& file);
+    
+    void reconstructLoopFromHits();
     
     std::atomic<bool> recordingEnabled { false };
     std::atomic<bool> recordingStarted { false };
@@ -74,6 +77,8 @@ public:
     float playbackSpeed = 0.5;
     std::map<DrumType, int> drumMidiMap;
 private:
+    void analyzeLoadedDrumLoop (const juce::AudioBuffer<float>& loopBuffer);
+    void classifyAudioBlock (int channel, const float* inputData, int numSamples);
     void recordAudio(juce::AudioBuffer<float>& buffer);
     void playAudio(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages);
     

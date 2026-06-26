@@ -57,19 +57,7 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
         recordButton.setButtonText(message);
         
         if (!isOn && p.recordingStarted.load()) {
-            // algorithm classifies/do classification
-            p.isPlaybackOn.store(false);
-            p.inputProcessor.classifyStoredHits(p.getSampleRate());
-            p.buildDrumBuffer();
-            p.inputProcessor.hitsToBuffer();
-
-            DBG("---- Editor sees classified hits ----");
-            for (const auto& ch : p.inputProcessor.classifiedHits) //hits are stored in inputProcessor.classifiedhits
-            {
-                DBG("Hit index " << ch.hitIndex
-                    << " classified as "
-                    << HitClassifier::toString(ch.type));
-            }
+            p.reconstructLoopFromHits();
 
             //recordButton.setButtonText("Recorded Thing");
             addAndMakeVisible(playButton);
@@ -86,6 +74,15 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
         //p.inputProcessor.storedHits;
         p.renderedTestBuffer = p.inputProcessor.hitsToBuffer();
       /*  saveOutput(p.renderedTestBuffer);*/
+    };
+    
+    loopReplaceButton.onClick = [&]() {
+        fileOpener([this] (const juce::File& file)
+        {
+            audioProcessor.processUploadedLoop(file);
+        });
+        
+        addAndMakeVisible(playButton);
     };
 
     kickButton.onClick = [&]() {

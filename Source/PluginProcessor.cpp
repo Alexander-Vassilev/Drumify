@@ -144,7 +144,59 @@ std::unique_ptr<juce::AudioFormatReader> HackBrownAudioProcessor::createReaderFo
     return std::unique_ptr<juce::AudioFormatReader> (formatManager.createReaderFor (std::move (stream)));
 }
 
-void HackBrownAudioProcessor::loadSampleFromFile (const juce::File& file, int midiNote) {
+void HackBrownAudioProcessor::analyzeLoadedDrumLoop (const juce::AudioBuffer<float>& loopBuffer)
+{
+    // 1. Reset your DSP components so old history is erased
+    envelopeFollower.reset();
+    inputProcessor.reset();
+
+    const int totalSamples = loopBuffer.getNumSamples();
+    const int chunkSize = getBlockSize();
+    
+    const float* totalInputData = loopBuffer.getReadPointer (0);
+
+    for (int startSample = 0; startSample < totalSamples; startSample += chunkSize)
+    {
+        int samplesToProcess = std::min (chunkSize, totalSamples - startSample);
+        const float* chunkPtr = totalInputData + startSample;
+        classifyAudioBlock (0, chunkPtr, samplesToProcess);
+    }
+    
+    DBG ("Drum loop analysis finished!");
+}
+
+void HackBrownAudioProcessor::processUploadedLoop(const juce::File& file)
+{
+    auto reader = createReaderForFile (file);
+    
+    if (reader == nullptr)
+    {
+        DBG ("Could not create reader for file: " + file.getFileName());
+        return;
+    }
+
+    // 2. Determine the size and properties of the audio file
+    const int numChannels = reader->numChannels;
+    const int totalSamples = static_cast<int> (reader->lengthInSamples);
+
+    // 3. Create a temporary buffer large enough to hold the entire file
+    juce::AudioBuffer<float> loopBuffer (numChannels, totalSamples);
+
+    // 4. Read the audio data from the file into our buffer
+    // Arguments: (destBuffer, destStartSample, numSamples, readerStartSample, useLeftChan, useRightChan)
+    reader->read (&loopBuffer,          // Destination JUCE buffer
+                  0,                    // Start sample in destination buffer
+                  totalSamples,         // Number of samples to read
+                  0,                    // Start sample position in the file
+                  true,                 // Read left channel (or mono)
+                  numChannels > 1);     // Read right channel if it exists
+
+    // 5. Pass the newly populated buffer to your analysis function
+    analyzeLoadedDrumLoop (loopBuffer);
+}
+
+void HackBrownAudioProcessor::loadSampleFromFile(const juce::File& file, int midiNote)
+{
     auto reader = createReaderForFile(file);
     loadSampleFromReader(std::move (reader), file.getFileNameWithoutExtension(), midiNote);
 }
@@ -393,6 +445,17 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
      */
 }
 
+void HackBrownAudioProcessor::classifyAudioBlock (int channel, const float* inputData, int numSamples)
+{
+    // Process the block sample-by-sample, exactly like your realtime function did
+    for (int sample = 0; sample < numSamples; sample++)
+    {
+        // Channel 0 used for mono analysis
+        float amp = envelopeFollower.processSample (channel, inputData[sample]);
+        inputProcessor.processSample (inputData[sample], amp);
+    }
+}
+
 void HackBrownAudioProcessor::recordAudio(juce::AudioBuffer<float>& buffer) {
     isPlayingRendered = true;
     recordingStarted.store(true);
@@ -417,10 +480,7 @@ void HackBrownAudioProcessor::recordAudio(juce::AudioBuffer<float>& buffer) {
 
         // Only process if we have a corresponding input channel
         if (channel < totalNumInputChannels) {
-            for (int sample = 0; sample < buffer.getNumSamples(); sample++) {
-                float amp = envelopeFollower.processSample(channel, inputData[sample]);
-                inputProcessor.processSample(inputData[sample], amp);
-            }
+            classifyAudioBlock(channel, inputData, buffer.getNumSamples());
         }
         else {
             // Clear any extra output channels
@@ -481,6 +541,22 @@ void HackBrownAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
         return;
     } else {
         buffer.clear();
+    }
+}
+
+void HackBrownAudioProcessor::reconstructLoopFromHits() {
+    // algorithm classifies/do classification
+    isPlaybackOn.store(false);
+    inputProcessor.classifyStoredHits(getSampleRate());
+    buildDrumBuffer();
+    inputProcessor.hitsToBuffer();
+
+    DBG("---- Editor sees classified hits ----");
+    for (const auto& ch : inputProcessor.classifiedHits) //hits are stored in inputProcessor.classifiedhits
+    {
+        DBG("Hit index " << ch.hitIndex
+            << " classified as "
+            << HitClassifier::toString(ch.type));
     }
 }
 
