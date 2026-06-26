@@ -94,31 +94,71 @@ void HackBrownAudioProcessor::changeProgramName(int index, const juce::String& n
 }
 
 //==============================================================================
+
+void HackBrownAudioProcessor::loadSampleFromReader (std::unique_ptr<juce::AudioFormatReader> reader,
+                                                   const juce::String& sampleName,
+                                                   int midiNote)
+{
+    if (reader == nullptr)
+        return;
+
+    juce::BigInteger noteRange;
+    noteRange.setBit (midiNote);
+
+    const double attack = 0.001;
+    const double release = 0.05;
+
+    auto* sound = new juce::SamplerSound (sampleName,
+                                          *reader,
+                                          noteRange,
+                                          midiNote,
+                                          attack,
+                                          release,
+                                          10.0);
+
+    // Clear old sounds assigned to this midiNote so they don't stack up
+    for (int i = drumSynth.getNumSounds() - 1; i >= 0; --i)
+    {
+        if (auto* oldSound = dynamic_cast<juce::SamplerSound*> (drumSynth.getSound(i).get()))
+        {
+            if (oldSound->appliesToNote (midiNote))
+                drumSynth.removeSound (i);
+        }
+    }
+
+    drumSynth.addSound (sound);
+}
+
+std::unique_ptr<juce::AudioFormatReader> HackBrownAudioProcessor::createReaderForFile (const juce::File& file)
+{
+    auto stream = std::make_unique<juce::FileInputStream> (file);
+
+    if (! stream->openedOk())
+    {
+        DBG ("Failed to open file stream: " + file.getFullPathName());
+        return nullptr;
+    }
+
+    // formatManager.createReaderFor returns a raw pointer, so we wrap it in a unique_ptr immediately.
+    // We use std::move(stream) because the manager takes ownership of the underlying file stream.
+    return std::unique_ptr<juce::AudioFormatReader> (formatManager.createReaderFor (std::move (stream)));
+}
+
+void HackBrownAudioProcessor::loadSampleFromFile (const juce::File& file, int midiNote) {
+    auto reader = createReaderForFile(file);
+    loadSampleFromReader(std::move (reader), file.getFileNameWithoutExtension(), midiNote);
+}
+
 //the function that wraps BinaryData in a MemoryInputStream
 void HackBrownAudioProcessor::loadSampleFromBinaryData(const juce::String& name, const void* data, int dataSize, int midiNote)
 {
     auto stream = std::make_unique<juce::MemoryInputStream>(data, (size_t)dataSize, false);
     std::unique_ptr<juce::AudioFormatReader> reader(formatManager.createReaderFor(std::move(stream)));
 
-    if (reader == nullptr)
-        return;
-
-    juce::BigInteger noteRange;
-    noteRange.setBit(midiNote);
-
-    const double attack = 0.001;
-    const double release = 0.05;
-
-    auto* sound = new juce::SamplerSound(name,
-        *reader,
-        noteRange,
-        midiNote,
-        attack,
-        release,
-        10.0);
-
-    drumSynth.addSound(sound);
+    loadSampleFromReader(std::move(reader), name, midiNote);
 }
+
+
 
 juce::AudioBuffer<float> loadAudioFile(const juce::File& file) {
     juce::AudioFormatManager formatManager;
@@ -149,12 +189,20 @@ void HackBrownAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlo
     //    ranTests = true;
     //    runDrumClassifierSmokeTests();
     //}
-
+    //setLatencySamples(inputProcessor.hitClassifier.fft.getLatencyInSamples());
+    inputProcessor.hitClassifier.fft.reset();
+    
     juce::dsp::ProcessSpec spec;
-
     spec.maximumBlockSize = samplesPerBlock;
     spec.sampleRate = sampleRate;
-    //spec.numChannels = numChannels;
+    //spec.numChannels = getTotalNumOutputChannels();
+    spec.numChannels = 1;
+    
+    auto coefficients = juce::dsp::IIR::Coefficients<float>::makePeakFilter(currentSampleRate, 1000, 2.0, 8.0f);
+    *bellFilter.coefficients = *coefficients;
+    bellFilter.prepare(spec);
+    bellFilter.reset();
+    
     envelopeFollower.prepare(spec);
     envelopeFollower.setAttackTime(15.0f);
     envelopeFollower.setReleaseTime(80.0f);
@@ -166,12 +214,15 @@ void HackBrownAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlo
         drumSynth.addVoice(new juce::SamplerVoice());
 
     drumSynth.setCurrentPlaybackSampleRate(sampleRate);
-
     drumSynth.clearSounds();
+    
+    drumMidiMap[kick]  = 36;
+    drumMidiMap[snare] = 38;
+    drumMidiMap[hat]   = 42;
 
-    loadSampleFromBinaryData("Kick", BinaryData::Kick_wav, BinaryData::Kick_wavSize, 36);
-    loadSampleFromBinaryData("Snare", BinaryData::Snare_wav, BinaryData::Snare_wavSize, 38);
-    loadSampleFromBinaryData("Hat", BinaryData::Hat_wav, BinaryData::Hat_wavSize, 42);
+    loadSampleFromBinaryData("Kick", BinaryData::Kick_wav, BinaryData::Kick_wavSize, drumMidiMap[kick]);
+    loadSampleFromBinaryData("Snare", BinaryData::Snare_wav, BinaryData::Snare_wavSize, drumMidiMap[snare]);
+    loadSampleFromBinaryData("Hat", BinaryData::Hat_wav, BinaryData::Hat_wavSize, drumMidiMap[hat]);
     currentSampleRate = sampleRate;
     //makeTestRender(); //TEMP, remove it later!!
 }
@@ -263,6 +314,13 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
         };
 
         if (!skip) {
+            if (events[i].filterOn) {
+                bellFilter.reset();
+                juce::dsp::AudioBlock<float> block(copier);
+                juce::dsp::ProcessContextReplacing<float> context(block);
+                bellFilter.process(context);
+            }
+            
             out.copyFrom(0, events[i].sampleIndex * playbackSpeed - offset, copier, 0, 0, copier.getNumSamples());
             out.applyGainRamp(0, events[i].sampleIndex * playbackSpeed - offset, copier.getNumSamples(), events[i].velocity01, events[i].velocity01);
         }
@@ -335,81 +393,93 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
      */
 }
 
+void HackBrownAudioProcessor::recordAudio(juce::AudioBuffer<float>& buffer) {
+    isPlayingRendered = true;
+    recordingStarted.store(true);
+    juce::ScopedNoDenormals noDenormals;
+    auto totalNumInputChannels = getTotalNumInputChannels();
+    auto totalNumOutputChannels = getTotalNumOutputChannels();
+
+    for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
+        buffer.clear(i, 0, buffer.getNumSamples());
+
+
+    for (int channel = 0; channel < totalNumInputChannels; ++channel)
+    {
+        auto* channelData = buffer.getWritePointer(channel);
+        juce::ignoreUnused(channelData);
+    }
+
+    auto* inputData = buffer.getReadPointer(0);
+
+    for (int channel = 0; channel < totalNumOutputChannels; ++channel) {
+        float* channelData = buffer.getWritePointer(channel);
+
+        // Only process if we have a corresponding input channel
+        if (channel < totalNumInputChannels) {
+            for (int sample = 0; sample < buffer.getNumSamples(); sample++) {
+                float amp = envelopeFollower.processSample(channel, inputData[sample]);
+                inputProcessor.processSample(inputData[sample], amp);
+            }
+        }
+        else {
+            // Clear any extra output channels
+            buffer.clear(channel, 0, buffer.getNumSamples());
+        }
+    }
+
+    buffer.clear();
+}
+
+void HackBrownAudioProcessor::playAudio(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages) {
+    buffer.clear();
+    //juce::AudioBuffer<float>& readBuff;
+
+    const int numSamples = buffer.getNumSamples();
+    const int remaining = renderedDrumBuffer.getNumSamples() - renderedReadPos;
+    const int toCopy = juce::jmin(numSamples, remaining);
+
+    auto* inputData = renderedDrumBuffer.getReadPointer(0);
+
+    for (int ch = 0; ch < buffer.getNumChannels(); ++ch) {
+        //buffer.copyFrom(ch, 0, renderedDrumBuffer, juce::jmin(ch, renderedDrumBuffer.getNumChannels()-1),
+        //                renderedReadPos, toCopy);
+        float* channelData = buffer.getWritePointer(ch);
+
+        for (int sample = 0; sample < toCopy; sample++) {
+            channelData[sample] = inputData[sample + renderedReadPos];
+        }
+
+        for (int sample = toCopy; sample < buffer.getNumSamples(); sample++) {
+            channelData[sample] = 0.0f;
+        }
+    }
+
+    renderedReadPos += toCopy;
+
+    if (renderedReadPos >= renderedDrumBuffer.getNumSamples()) {
+        isPlayingRendered = false;
+        isPlaybackOn.store(false);
+        renderedReadPos = 0;
+    }
+
+    midiMessages.clear();
+}
 
 void HackBrownAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages) {
-    if (recordingEnabled.load()) {
-        isPlayingRendered = true;
-        recordingStarted.store(true);
-        juce::ScopedNoDenormals noDenormals;
-        auto totalNumInputChannels = getTotalNumInputChannels();
-        auto totalNumOutputChannels = getTotalNumOutputChannels();
-
-        for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
-            buffer.clear(i, 0, buffer.getNumSamples());
-
-
-        for (int channel = 0; channel < totalNumInputChannels; ++channel)
-        {
-            auto* channelData = buffer.getWritePointer(channel);
-            juce::ignoreUnused(channelData);
-        }
-
-        auto* inputData = buffer.getReadPointer(0);
-
-        for (int channel = 0; channel < totalNumOutputChannels; ++channel) {
-            float* channelData = buffer.getWritePointer(channel);
-
-            // Only process if we have a corresponding input channel
-            if (channel < totalNumInputChannels) {
-                for (int sample = 0; sample < buffer.getNumSamples(); sample++) {
-                    float amp = envelopeFollower.processSample(channel, inputData[sample]);
-                    inputProcessor.processSample(inputData[sample], amp);
-                }
-            }
-            else {
-                // Clear any extra output channels
-                buffer.clear(channel, 0, buffer.getNumSamples());
-            }
-        }
-
-        buffer.clear();
-    }
-    else if (isPlaybackOn.load()) {
-        buffer.clear();
-        //juce::AudioBuffer<float>& readBuff;
-
-        const int numSamples = buffer.getNumSamples();
-        const int remaining = renderedDrumBuffer.getNumSamples() - renderedReadPos;
-        const int toCopy = juce::jmin(numSamples, remaining);
-
-        auto* inputData = renderedDrumBuffer.getReadPointer(0);
-
-        for (int ch = 0; ch < buffer.getNumChannels(); ++ch) {
-            //buffer.copyFrom(ch, 0, renderedDrumBuffer, juce::jmin(ch, renderedDrumBuffer.getNumChannels()-1),
-            //                renderedReadPos, toCopy);
-            float* channelData = buffer.getWritePointer(ch);
-
-            for (int sample = 0; sample < toCopy; sample++) {
-                channelData[sample] = inputData[sample + renderedReadPos];
-            }
-
-            for (int sample = toCopy; sample < buffer.getNumSamples(); sample++) {
-                channelData[sample] = 0.0f;
-            }
-        }
-
-        renderedReadPos += toCopy;
-
-        if (renderedReadPos >= renderedDrumBuffer.getNumSamples()) {
-            isPlayingRendered = false;
-            isPlaybackOn.store(false);
-            renderedReadPos = 0;
-        }
-
-        midiMessages.clear();
+    auto totalNumInputChannels  = getTotalNumInputChannels();
+    
+    if (buffer.getNumSamples() == 0 || totalNumInputChannels == 0) {
         return;
     }
-    else {
+    
+    if (recordingEnabled.load()) {
+        recordAudio(buffer);
+    } else if (isPlaybackOn.load()) {
+        playAudio(buffer, midiMessages);
+        
+        return;
+    } else {
         buffer.clear();
     }
 }

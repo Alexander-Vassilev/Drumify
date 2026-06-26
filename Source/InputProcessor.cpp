@@ -208,14 +208,57 @@ void InputProcessor::classifyStoredHits(double sampleRate)
     classifiedHits.reserve(storedHitsIndex);
 
     //DBG("---- Classifying Stored Hits ----");
-
+    //storedHitsIndex = 1;
+    
     for (int i = 0; i < storedHitsIndex; ++i)
     {
-        const auto& hit = storedHits[i];
+// ------------------------------ TEMPORARY FILE LOADING TEST SUBSTITUTING MIC ------------------------
+        
+        juce::AudioFormatManager formatManager;
+        juce::AudioBuffer<float> sampleBuffer;
+        double sampleRate = 44100;
+        const float* inputData = nullptr;
+        int numSamples;
 
-        const auto features =
-            HitClassifier::extractFeatures(hit.buffer, hit.hitLength, sampleRate);
+        formatManager.registerBasicFormats();
+        juce::File file("/Users/lightspark/Documents/Image-Line/FL Studio/Projects/5.24.2026-DrumifyPlayground/Noise.wav");
+        
+        std::unique_ptr<juce::AudioFormatReader> reader(formatManager.createReaderFor(file));
 
+        if (reader != nullptr) {
+            sampleBuffer.setSize((int)reader->numChannels, (int)reader->lengthInSamples);
+            
+            reader->read(&sampleBuffer,
+                             0,                            // dest start sample
+                             (int)reader->lengthInSamples, // num samples to read
+                             0,                            // source start sample
+                             true,                         // fill left channel
+                             true);                        // fill right channel
+            inputData = sampleBuffer.getReadPointer(0);
+            numSamples = sampleBuffer.getNumSamples();
+            DBG("loaded file");
+        } else {
+            DBG("failed to load file");
+        }
+        
+        MouthHit hit;
+        const auto features = hitClassifier.extractFeatures(sampleBuffer, numSamples, sampleRate);
+// ------------------------------ TEMPORARY FILE LOADING TEST SUBSTITUTING MIC ------------------------
+        //const auto& hit = storedHits[i];
+        //const auto features = hitClassifier.extractFeatures(hit.buffer, hit.hitLength, sampleRate);
+        
+        DBG("STFT window count: " << features.stftData.size());
+        
+        for (int i = 0; i < 4; i++) {
+            //std::cout << "bins begin: ";
+            
+            for (int j = 0; j < FFTProcessor::numBins; j+= 20) {
+                //std::cout << std::trunc(100 * features.stftData[i][j]) / 100 << " ";
+            }
+            
+            //std::cout << "bins end" << std::endl;
+        }
+        
         ClassifiedHit classified;
         classified.hitIndex = i;
         classified.onsetSample = hit.onsetSample;

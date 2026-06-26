@@ -88,9 +88,41 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
       /*  saveOutput(p.renderedTestBuffer);*/
     };
 
+    kickButton.onClick = [&]() {
+        fileOpener([this] (const juce::File& file)
+        {
+            int midiNote = audioProcessor.drumMidiMap[DrumType::kick];
+            audioProcessor.loadSampleFromFile(file, midiNote);
+        });
+    };
+    
+    snareButton.onClick = [&]() {
+        fileOpener([this] (const juce::File& file)
+        {
+            int midiNote = audioProcessor.drumMidiMap[DrumType::snare];
+            audioProcessor.loadSampleFromFile(file, midiNote);
+        });
+    };
+    
+    hatButton.onClick = [&]() {
+        fileOpener([this] (const juce::File& file)
+        {
+            int midiNote = audioProcessor.drumMidiMap[DrumType::hat];
+            audioProcessor.loadSampleFromFile(file, midiNote);
+        });
+    };
+    
+    // File reader init
+    formatManager.registerBasicFormats();
+    //transportSource.addChangeListener (this);
+    
     // Make sure that before the constructor has finished, you've set the
     // editor's size to whatever you need it to be.
     addAndMakeVisible(recordButton);
+    addAndMakeVisible(loopReplaceButton);
+    addAndMakeVisible(kickButton);
+    addAndMakeVisible(snareButton);
+    addAndMakeVisible(hatButton);
     setSize (400, 300);
 }
 
@@ -107,29 +139,115 @@ void HackBrownAudioProcessorEditor::paint (juce::Graphics& g)
     {
         g.drawImageWithin (background,
                            0, 0, getWidth(), getHeight(),
-                           juce::RectanglePlacement::fillDestination); 
+                           juce::RectanglePlacement::fillDestination);
         
         g.setColour (juce::Colours::black.withAlpha (0.35f));
-
+        
         g.setColour (juce::Colours::white.withAlpha (0.12f));
-
+        
         // subtle top highlight line
         g.setColour (juce::Colours::white.withAlpha (0.10f));
         g.setColour (juce::Colours::white.withAlpha(0.9f));
         juce::Font font ("Calibri", 50.0f, juce::Font::bold);
         g.setFont (font);
         //g.drawFittedText ("DRUMIFY", getLocalBounds(), juce::Justification::centred, 1);
- 
     }
+    /*
+    if (isHovering)
+    {
+        g.setColour (juce::Colours::lightgreen);
+        g.drawRect (getLocalBounds(), 3); // Draw a thick border
+        g.drawText ("Drop it here!", getLocalBounds(), juce::Justification::centred);
+    }
+    else
+    {
+        g.drawText ("Drag an audio file here", getLocalBounds(), juce::Justification::centred);
+    }*/
 }
 
 void HackBrownAudioProcessorEditor::resized()
 {
     // This is generally where you'll want to lay out the positions of any
     // subcomponents in your editor..
+    int windowWidth = 1000;
+    int windowHeight = 700;
+    
     setSize(1000, 700);
-    recordButton.setBounds(20, 20, 170, 40);
-    playButton.setBounds(20, 80, 170, 40);
+    
+    int buttonWidth = 170;
+    
+    recordButton.setBounds(20, 20, buttonWidth, 40);
+    playButton.setBounds(20, 80, buttonWidth, 40);
     mySlider.setBounds(200, 50, 100, 200);
+    loopReplaceButton.setBounds((windowWidth - buttonWidth) / 2, 200, buttonWidth, 70);
+    
+    int importSoundXOffset = 100;
+    int importSoundHeight = 70;
+    
+    kickButton.setBounds(importSoundXOffset, 320, buttonWidth, importSoundHeight);
+    snareButton.setBounds(importSoundXOffset, 420, buttonWidth, importSoundHeight);
+    hatButton.setBounds(importSoundXOffset, 520, buttonWidth, importSoundHeight);
 }
 
+/*
+bool HackBrownAudioProcessorEditor::isInterestedInFileDrag (const juce::StringArray& files)
+{
+    for (auto file : files)
+    {
+        if (file.endsWith(".wav") || file.endsWith(".mp3") || file.endsWith(".aif"))
+            return true;
+    }
+    return false;
+}
+
+void HackBrownAudioProcessorEditor::fileDragEnter (const juce::StringArray& files, int x, int y)
+{
+    if ((x > 100 && x < 200) & (y > 500 && y < 600)) {
+        isHovering = true;
+        repaint();
+    }
+}
+
+void HackBrownAudioProcessorEditor::fileDragExit (const juce::StringArray& files)
+{
+    isHovering = false;
+    repaint();
+}
+
+void HackBrownAudioProcessorEditor::fileDragMove (const juce::StringArray& files, int x, int y)
+{
+    // You can use x and y to see *where* they are hovering if you have a specific drop-zone
+}
+
+void HackBrownAudioProcessorEditor::filesDropped (const juce::StringArray& files, int x, int y)
+{
+    isHovering = false;
+    repaint();
+
+    // Grab the first file from the array
+    juce::File file (files[0]);
+    DBG("file dropped");
+    
+    // Pass it to your processor (make sure to implement this method in your Processor!)
+    //audioProcessor.loadDroppedFile (file);
+}
+*/
+
+void HackBrownAudioProcessorEditor::fileOpener (std::function<void (const juce::File&)> fileAction)
+{
+    chooser = std::make_unique<juce::FileChooser> ("Select a Wav or mp3 file to use...", juce::File {}, "*.wav");
+    auto chooserFlags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
+    
+    // Capture the callback function by value
+    chooser->launchAsync (chooserFlags, [this, fileAction] (const juce::FileChooser& fc)
+    {
+        auto file = fc.getResult();
+
+        if (file != juce::File {})
+        {
+            DBG ("file chosen");
+            // Run the custom code that was passed into fileOpener
+            fileAction(file);
+        }
+    });
+}

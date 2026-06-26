@@ -35,6 +35,7 @@ public:
     
     juce::AudioBuffer<float> hitsToBuffer();
     
+    HitClassifier hitClassifier;
     int storedHitsIndex = 0;
     void classifyStoredHits(double sampleRate);
     static constexpr int numHits = 64;

@@ -12,6 +12,12 @@
 #include "SineGenerator.h"
 #include "InputProcessor.h"
 
+enum DrumType {
+    kick,
+    snare,
+    hat
+};
+
 //==============================================================================
 /**
 */
@@ -57,13 +63,20 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
     
+    void loadSampleFromFile (const juce::File& file, int midiNote);
+    std::unique_ptr<juce::AudioFormatReader> createReaderForFile (const juce::File& file);
+    
     std::atomic<bool> recordingEnabled { false };
     std::atomic<bool> recordingStarted { false };
     std::atomic<bool> isPlaybackOn { false };
     juce::AudioBuffer<float> renderedTestBuffer;
     InputProcessor inputProcessor;
     float playbackSpeed = 0.5;
+    std::map<DrumType, int> drumMidiMap;
 private:
+    void recordAudio(juce::AudioBuffer<float>& buffer);
+    void playAudio(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages);
+    
     juce::dsp::BallisticsFilter<float> envelopeFollower;
     SineGenerator sineGenerator;
 
@@ -72,6 +85,9 @@ private:
     juce::Synthesiser drumSynth;
     juce::AudioFormatManager formatManager;
     
+    void loadSampleFromReader (std::unique_ptr<juce::AudioFormatReader> reader,
+                               const juce::String& sampleName,
+                               int midiNote);
     void loadSampleFromBinaryData (const juce::String& name,
                                const void* data,
                                int dataSize,
@@ -84,6 +100,8 @@ private:
         int sampleIndex;   // absolute sample index in rendered timeline
         int midiNote;      // 36 kick, 38 snare, 42 hat...
         float velocity01;  // 0..1
+        bool filterOn = true;     // Determines whether to apply formant-accentuating bell filter
+        float centerFreq = 1000;  // Filter centre freq
     };
 
     // Offline render
@@ -95,6 +113,9 @@ private:
     juce::AudioBuffer<float> renderedDrumBuffer;
     int renderedReadPos = 0;
     bool isPlayingRendered = false;
+    
+    // Filter
+    juce::dsp::IIR::Filter<float> bellFilter;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HackBrownAudioProcessor)
 };
