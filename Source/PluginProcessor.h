@@ -68,13 +68,14 @@ public:
     void processUploadedLoop(const juce::File& file);
     
     void reconstructLoopFromHits();
+    void getLongestSampleLengthInSamples();
     
     std::atomic<bool> recordingEnabled { false };
     std::atomic<bool> recordingStarted { false };
     std::atomic<bool> isPlaybackOn { false };
     juce::AudioBuffer<float> renderedTestBuffer;
     InputProcessor inputProcessor;
-    float playbackSpeed = 0.5;
+    float playbackSpeed = 1;
     std::map<DrumType, int> drumMidiMap;
 private:
     void analyzeLoadedDrumLoop (const juce::AudioBuffer<float>& loopBuffer);
@@ -88,6 +89,7 @@ private:
     double currentSampleRate = 44100.0;
 
     juce::Synthesiser drumSynth;
+    int numSamplesLongestSound = 0; // Length of longest drumSynth sound in samples
     juce::AudioFormatManager formatManager;
     
     void loadSampleFromReader (std::unique_ptr<juce::AudioFormatReader> reader,
@@ -105,7 +107,7 @@ private:
         int sampleIndex;   // absolute sample index in rendered timeline
         int midiNote;      // 36 kick, 38 snare, 42 hat...
         float velocity01;  // 0..1
-        bool filterOn = true;     // Determines whether to apply formant-accentuating bell filter
+        bool filterOn = false;     // Determines whether to apply formant-accentuating bell filter
         float centerFreq = 1000;  // Filter centre freq
     };
 
@@ -121,6 +123,8 @@ private:
     
     // Filter
     juce::dsp::IIR::Filter<float> bellFilter;
+    
+    bool playprint = true;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HackBrownAudioProcessor)
 };

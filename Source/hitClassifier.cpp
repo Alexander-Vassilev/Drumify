@@ -53,7 +53,7 @@ HitFeatures HitClassifier::extractFeatures(const juce::AudioBuffer<float>& buffe
     f.zcr = computeZeroCrossingRate(buffer, length);
     f.durationSec = (sampleRate > 0.0) ? (float)length / (float)sampleRate : 0.0f;
     
-    DBG("length: " << length);
+    DBG("length: " << f.durationSec);
     
     if (length < 1025) {
         f.fftActive = false;

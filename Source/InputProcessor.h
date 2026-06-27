@@ -64,10 +64,11 @@ private:
     // --- Detection parameters ---
     static constexpr float onsetThreshold  = 0.05f;
     static constexpr float offsetThreshold = 0.04f;
-    static constexpr float noveltyThreshold = 0.015f;
+    //static constexpr float noveltyThreshold = 0.015f;
+    static constexpr float noveltyThreshold = 0.007f;
 
     static constexpr int minOnsetSamples  = 128;
-    static constexpr int minOffsetSamples = 1024;
+    static constexpr int minOffsetSamples = 512;
 
     // --- Buffering ---
     static constexpr int samplesPerHit   = 65536;
@@ -87,6 +88,8 @@ private:
     int offsetCounter = 0;
 
     float previousAmp = 0.0f;
+    float baselineAmp = 0.0f;
+    float trackerSpeed = 0.005f;
 
     bool isActivated = false;
 };

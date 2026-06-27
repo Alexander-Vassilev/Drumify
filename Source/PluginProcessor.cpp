@@ -95,6 +95,30 @@ void HackBrownAudioProcessor::changeProgramName(int index, const juce::String& n
 
 //==============================================================================
 
+void HackBrownAudioProcessor::getLongestSampleLengthInSamples()
+{
+    int maxLength = 0;
+
+    // Loop backward or forward through all sounds currently in the synth
+    for (int i = 0; i < drumSynth.getNumSounds(); ++i)
+    {
+        // Try to cast the base juce::SynthesiserSound to a juce::SamplerSound
+        if (auto* samplerSound = dynamic_cast<juce::SamplerSound*> (drumSynth.getSound(i).get()))
+        {
+            // Get the shared pointer to the audio buffer holding the actual audio data
+            if (auto audioData = samplerSound->getAudioData())
+            {
+                int currentLength = audioData->getNumSamples();
+                
+                if (currentLength > maxLength)
+                    maxLength = currentLength;
+            }
+        }
+    }
+
+    numSamplesLongestSound = maxLength;
+}
+
 void HackBrownAudioProcessor::loadSampleFromReader (std::unique_ptr<juce::AudioFormatReader> reader,
                                                    const juce::String& sampleName,
                                                    int midiNote)
@@ -162,6 +186,7 @@ void HackBrownAudioProcessor::analyzeLoadedDrumLoop (const juce::AudioBuffer<flo
         classifyAudioBlock (0, chunkPtr, samplesToProcess);
     }
     
+    reconstructLoopFromHits();
     DBG ("Drum loop analysis finished!");
 }
 
@@ -275,6 +300,8 @@ void HackBrownAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlo
     loadSampleFromBinaryData("Kick", BinaryData::Kick_wav, BinaryData::Kick_wavSize, drumMidiMap[kick]);
     loadSampleFromBinaryData("Snare", BinaryData::Snare_wav, BinaryData::Snare_wavSize, drumMidiMap[snare]);
     loadSampleFromBinaryData("Hat", BinaryData::Hat_wav, BinaryData::Hat_wavSize, drumMidiMap[hat]);
+    getLongestSampleLengthInSamples();
+    
     currentSampleRate = sampleRate;
     //makeTestRender(); //TEMP, remove it later!!
 }
@@ -321,11 +348,16 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
     out.clear();
 
     juce::SynthesiserSound::Ptr kick = drumSynth.getSound(0);
+    DBG("a");
     auto* samplerSound = dynamic_cast<juce::SamplerSound*>(kick.get());
+    DBG("b");
     juce::AudioBuffer<float>* kickData = samplerSound->getAudioData();
+    DBG("c");
     int kickLen = kickData->getNumSamples();
 
-    DBG("built ma kick");
+    DBG("built ma kick with a length of: " << kickLen);
+    
+    
 
     juce::SynthesiserSound::Ptr snare = drumSynth.getSound(1);
     samplerSound = dynamic_cast<juce::SamplerSound*>(snare.get());
@@ -347,7 +379,7 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
     for (int i = 0; i < events.size(); i++) {
         DBG("num events" << events.size());
         juce::AudioBuffer<float> copier;
-        bool skip = false;
+        bool skipFilter = true;
 
         switch (events[i].midiNote) {
         case 36:
@@ -365,17 +397,19 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
             break;
         };
 
-        if (!skip) {
+        if (!skipFilter) {
             if (events[i].filterOn) {
                 bellFilter.reset();
                 juce::dsp::AudioBlock<float> block(copier);
                 juce::dsp::ProcessContextReplacing<float> context(block);
                 bellFilter.process(context);
             }
-            
-            out.copyFrom(0, events[i].sampleIndex * playbackSpeed - offset, copier, 0, 0, copier.getNumSamples());
-            out.applyGainRamp(0, events[i].sampleIndex * playbackSpeed - offset, copier.getNumSamples(), events[i].velocity01, events[i].velocity01);
         }
+        DBG("attempting copy");
+        DBG("start sample: " << events[i].sampleIndex * playbackSpeed - offset);
+        out.copyFrom(0, events[i].sampleIndex * playbackSpeed - offset, copier, 0, 0, copier.getNumSamples());
+        DBG("applying gain ramp");
+        out.applyGainRamp(0, events[i].sampleIndex * playbackSpeed - offset, copier.getNumSamples(), events[i].velocity01, events[i].velocity01);
         DBG("copied");
     }
 
@@ -451,7 +485,8 @@ void HackBrownAudioProcessor::classifyAudioBlock (int channel, const float* inpu
     for (int sample = 0; sample < numSamples; sample++)
     {
         // Channel 0 used for mono analysis
-        float amp = envelopeFollower.processSample (channel, inputData[sample]);
+        float amp = envelopeFollower.processSample (0, inputData[sample]);
+        //DBG(amp);
         inputProcessor.processSample (inputData[sample], amp);
     }
 }
@@ -493,6 +528,7 @@ void HackBrownAudioProcessor::recordAudio(juce::AudioBuffer<float>& buffer) {
 
 void HackBrownAudioProcessor::playAudio(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages) {
     buffer.clear();
+
     //juce::AudioBuffer<float>& readBuff;
 
     const int numSamples = buffer.getNumSamples();
@@ -518,6 +554,7 @@ void HackBrownAudioProcessor::playAudio(juce::AudioBuffer<float>& buffer, juce::
     renderedReadPos += toCopy;
 
     if (renderedReadPos >= renderedDrumBuffer.getNumSamples()) {
+        DBG("Stop playback");
         isPlayingRendered = false;
         isPlaybackOn.store(false);
         renderedReadPos = 0;
@@ -527,9 +564,20 @@ void HackBrownAudioProcessor::playAudio(juce::AudioBuffer<float>& buffer, juce::
 }
 
 void HackBrownAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages) {
+    if (playprint) {
+        DBG("PLAYING");
+        DBG("");
+        DBG("");
+        DBG("");
+        DBG("");
+        playprint = false;
+    }
+    
     auto totalNumInputChannels  = getTotalNumInputChannels();
     
     if (buffer.getNumSamples() == 0 || totalNumInputChannels == 0) {
+        DBG("input channels 0");
+        jassertfalse;
         return;
     }
     
@@ -540,6 +588,7 @@ void HackBrownAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
         
         return;
     } else {
+        
         buffer.clear();
     }
 }
@@ -548,9 +597,14 @@ void HackBrownAudioProcessor::reconstructLoopFromHits() {
     // algorithm classifies/do classification
     isPlaybackOn.store(false);
     inputProcessor.classifyStoredHits(getSampleRate());
+    DBG("classified");
+    //DBG(inputProcessor.classifiedHits[0].durationSec);
+    //DBG(inputProcessor.classifiedHits[0].rms);
     buildDrumBuffer();
+    DBG("2");
     inputProcessor.hitsToBuffer();
-
+    DBG("3");
+    
     DBG("---- Editor sees classified hits ----");
     for (const auto& ch : inputProcessor.classifiedHits) //hits are stored in inputProcessor.classifiedhits
     {
@@ -596,15 +650,23 @@ void HackBrownAudioProcessor::buildDrumBuffer() {
     std::vector<DrumEventAbs> events;
     const double sr = currentSampleRate;
     int lastSampleHit = 0;
-    int lastSize = 0;
+    float lastSize = 0;
 
     for (auto processedHit : inputProcessor.classifiedHits) {
         lastSampleHit = processedHit.onsetSample;
         lastSize = processedHit.durationSec;
         events.push_back({ processedHit.onsetSample, (int)processedHit.type, processedHit.rms }); // kick at 0s
     }
+    
+    for (auto e : events) {
+        DBG("event");
+        DBG("DrumEventAbs -> Index: %d | Note: %d | Vel: %.2f | Filter: %s | Freq: %.1f Hz" <<
+                    e.sampleIndex << " " << e.midiNote << " " << e.velocity01);
+    }
 
-    const int outLen = int(lastSampleHit + lastSize * sr + 100);
+    const int outLen = int(lastSampleHit + lastSize * sr + numSamplesLongestSound);
+    DBG("lastSample");
+    DBG(lastSampleHit);
     renderedDrumBuffer = renderDrumLoopOffline(events, sr, outLen);
 
     renderedReadPos = 0;

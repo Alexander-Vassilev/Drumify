@@ -51,6 +51,7 @@ void InputProcessor::reset()
     onsetCounter = 0;
     offsetCounter = 0;
     previousAmp = 0.0f;
+    baselineAmp = 0;
 }
 
 void InputProcessor::processSample(float sample, float amp)
@@ -65,23 +66,32 @@ void InputProcessor::processSample(float sample, float amp)
     preRollIndex = (preRollIndex + 1) % preRollSamples;
 
     // --- Envelope novelty (onset emphasis) ---
-    float novelty = amp - previousAmp;
-    previousAmp = amp;
+    // --- Envelope novelty (Baseline Tracker) ---
+    // The baseline slowly chases the current amplitude
+    baselineAmp += trackerSpeed * (amp - baselineAmp);
+    
+    // Novelty is how far the current amp has spiked ABOVE the slow baseline
+    float novelty = std::max(0.0f, amp - baselineAmp);
 
     // ===============================
     // ONSET LOGIC (simplified trigger)
     // ===============================
     if (!isActivated)
     {
+        
+        DBG("novelty and amp: ");
+        DBG(novelty);
+        DBG(amp);
         // Trigger on FIRST strong transient, not sustained signal
         if (amp > onsetThreshold && novelty > noveltyThreshold)
         {
+            DBG("new hit");
             // --- Activate hit immediately ---
             isActivated = true;
             currHitIndex = 0;
 
             auto& hit = storedHits[storedHitsIndex];
-            hit.onsetSample = currSample - preRollSamples; // Account for pre-roll
+            hit.onsetSample = std::max(0, currSample - preRollSamples); // Account for pre-roll
             hit.buffer.setSize(1, samplesPerHit);
             hit.buffer.clear();
             writePtr = hit.buffer.getWritePointer(0);
@@ -110,11 +120,14 @@ void InputProcessor::processSample(float sample, float amp)
         // ===============================
         if (amp < offsetThreshold) {
             offsetCounter++;
-
+            DBG(offsetCounter);
             if (offsetCounter >= minOffsetSamples) {
+                DBG("hit complete");
                 // --- Finalize hit ---
                 auto& hit = storedHits[storedHitsIndex];
                 hit.hitLength = currHitIndex;
+                DBG("hit length:");
+                DBG(currHitIndex);
 
                 storedHitsIndex++;
                 isActivated = false;
@@ -198,6 +211,7 @@ juce::AudioBuffer<float> InputProcessor::hitsToBuffer() {
             currIndex++;
         }
     }
+    DBG("Hits conveted to bufer");
     
     return retBuffer;
 };
@@ -214,7 +228,7 @@ void InputProcessor::classifyStoredHits(double sampleRate)
     {
 // ------------------------------ TEMPORARY FILE LOADING TEST SUBSTITUTING MIC ------------------------
         
-        juce::AudioFormatManager formatManager;
+        /*juce::AudioFormatManager formatManager;
         juce::AudioBuffer<float> sampleBuffer;
         double sampleRate = 44100;
         const float* inputData = nullptr;
@@ -242,10 +256,10 @@ void InputProcessor::classifyStoredHits(double sampleRate)
         }
         
         MouthHit hit;
-        const auto features = hitClassifier.extractFeatures(sampleBuffer, numSamples, sampleRate);
+        const auto features = hitClassifier.extractFeatures(sampleBuffer, numSamples, sampleRate);*/
 // ------------------------------ TEMPORARY FILE LOADING TEST SUBSTITUTING MIC ------------------------
-        //const auto& hit = storedHits[i];
-        //const auto features = hitClassifier.extractFeatures(hit.buffer, hit.hitLength, sampleRate);
+        const auto& hit = storedHits[i];
+        const auto features = hitClassifier.extractFeatures(hit.buffer, hit.hitLength, sampleRate);
         
         DBG("STFT window count: " << features.stftData.size());
         
@@ -266,6 +280,7 @@ void InputProcessor::classifyStoredHits(double sampleRate)
         classified.rms = features.rms;
         classified.zcr = features.zcr;
         classified.durationSec = features.durationSec;
+        DBG(" Dur=" << classified.durationSec << "s");
 
         classifiedHits.push_back(classified);
 

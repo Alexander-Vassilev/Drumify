@@ -67,12 +67,12 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
     };
     
     playButton.onClick = [&]() {
-        p.isPlaybackOn.store(true);
         p.inputProcessor.reset();
         
         std::cout << p.inputProcessor.storedHitsIndex << std::endl;
         //p.inputProcessor.storedHits;
         p.renderedTestBuffer = p.inputProcessor.hitsToBuffer();
+        p.isPlaybackOn.store(true);
       /*  saveOutput(p.renderedTestBuffer);*/
     };
     
@@ -91,6 +91,8 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
             int midiNote = audioProcessor.drumMidiMap[DrumType::kick];
             audioProcessor.loadSampleFromFile(file, midiNote);
         });
+        
+        audioProcessor.getLongestSampleLengthInSamples();
     };
     
     snareButton.onClick = [&]() {
@@ -99,6 +101,8 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
             int midiNote = audioProcessor.drumMidiMap[DrumType::snare];
             audioProcessor.loadSampleFromFile(file, midiNote);
         });
+        
+        audioProcessor.getLongestSampleLengthInSamples();
     };
     
     hatButton.onClick = [&]() {
@@ -107,6 +111,8 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
             int midiNote = audioProcessor.drumMidiMap[DrumType::hat];
             audioProcessor.loadSampleFromFile(file, midiNote);
         });
+        
+        audioProcessor.getLongestSampleLengthInSamples();
     };
     
     // File reader init

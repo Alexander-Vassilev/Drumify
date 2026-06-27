@@ -2,7 +2,7 @@
 
 <JUCERPROJECT id="m04lHA" name="HackBrown" projectType="audioplug" useAppConfig="0"
               addUsingNamespaceToJuceHeader="0" jucerFormatVersion="1" cppLanguageStandard="20"
-              pluginCharacteristicsValue="pluginIsSynth">
+              pluginCharacteristicsValue="pluginWantsMidiIn">
   <MAINGROUP id="HqYlGJ" name="HackBrown">
     <GROUP id="{14C3BC7E-3FBE-C008-1AB6-8469D98A27DE}" name="Source">
       <FILE id="vAKHHK" name="utils.cpp" compile="1" resource="0" file="Source/utils.cpp"/>
