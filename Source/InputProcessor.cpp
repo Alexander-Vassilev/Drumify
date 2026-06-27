@@ -79,9 +79,9 @@ void InputProcessor::processSample(float sample, float amp)
     if (!isActivated)
     {
         
-        DBG("novelty and amp: ");
-        DBG(novelty);
-        DBG(amp);
+        //DBG("novelty and amp: ");
+        //DBG(novelty);
+        //DBG(amp);
         // Trigger on FIRST strong transient, not sustained signal
         if (amp > onsetThreshold && novelty > noveltyThreshold)
         {

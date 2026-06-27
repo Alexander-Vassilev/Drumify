@@ -104,6 +104,7 @@ HitType HitClassifier::classify(const HitFeatures& f)
             
             auto maxIt = std::max_element(avgEnergies.begin(), avgEnergies.end());
             int dominantBand = std::distance(avgEnergies.begin(), maxIt);
+            DBG("dommy mommy: " << dominantBand);
             dominantBands.push_back(dominantBand);
         }
         
@@ -132,10 +133,11 @@ HitType HitClassifier::classify(const HitFeatures& f)
             mostCommonBand = currBand;
         }
         
+        float dominanceRatio = static_cast<float>(mostTimesOccurring) / numWindows;
+        
         DBG("Energy density located at filterbank #" << mostCommonBand);
         DBG("This corresponds to " << bandIndexToHz(mostCommonBand, 44100) << " hz");
-        
-        float dominanceRatio = mostTimesOccurring / numWindows;
+        DBG("DominanceRatio: " << dominanceRatio);
         
         if (mostCommonBand > 15 && dominanceRatio > 0.7) {
             DBG("Hat");

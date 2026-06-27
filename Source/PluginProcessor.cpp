@@ -418,65 +418,6 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
     DBG("finished building buffer");
 
     return out;
-    //auto* snare = drumSynth.getSound(1);
-    //auto* hat = drumSynth.getSound(2);
-
-
-    // Ensure synth is configured
-    /*
-    drumSynth.setCurrentPlaybackSampleRate(sampleRate);
-
-    // Build a global MIDI timeline (absolute sample positions)
-    juce::MidiBuffer globalMidi;
-    const int noteOffDelay = int(0.05 * sampleRate); // 50ms
-
-    for (const auto& e : events)
-    {
-        auto on = juce::MidiMessage::noteOn(
-            1, e.midiNote,
-            (juce::uint8) juce::jlimit(1, 127, int(e.velocity01 * 127.0f))
-        );
-        auto off = juce::MidiMessage::noteOff(1, e.midiNote);
-
-        globalMidi.addEvent(on, e.sampleIndex);
-        globalMidi.addEvent(off, e.sampleIndex + noteOffDelay);
-    }
-
-    // Render in chunks
-    const int blockSize = 512;
-    juce::MidiBuffer blockMidi;
-
-    DBG("outputNumSamples " << outputNumSamples);
-    DBG("blockSize " << blockSize);
-
-    for (int pos = 0; pos < outputNumSamples; pos += blockSize)
-    {
-        const int numThisBlock = juce::jmin(blockSize, outputNumSamples - pos);
-        blockMidi.clear();
-
-        // Copy events that fall inside [pos, pos+numThisBlock) into blockMidi with relative offsets
-        for (const auto metadata : globalMidi)
-        {
-            const int eventSample = metadata.samplePosition;
-            if (eventSample >= pos && eventSample < pos + numThisBlock)
-            {
-                blockMidi.addEvent(metadata.getMessage(), eventSample - pos);
-            }
-        }
-
-        for (const auto metadata : blockMidi)
-        {
-            auto message = metadata.getMessage();
-            DBG("Sample: " << metadata.samplePosition
-                << " Note: " << message.getNoteNumber()
-                << " Velocity: " << message.getVelocity()
-                << " Is NoteOn: " << (int)message.isNoteOn());
-        }
-        drumSynth.renderNextBlock(out, blockMidi, 100, numThisBlock);
-    }
-
-    return out;
-     */
 }
 
 void HackBrownAudioProcessor::classifyAudioBlock (int channel, const float* inputData, int numSamples)

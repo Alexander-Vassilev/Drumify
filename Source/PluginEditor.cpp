@@ -71,7 +71,7 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
         
         std::cout << p.inputProcessor.storedHitsIndex << std::endl;
         //p.inputProcessor.storedHits;
-        p.renderedTestBuffer = p.inputProcessor.hitsToBuffer();
+        //p.renderedTestBuffer = p.inputProcessor.hitsToBuffer();
         p.isPlaybackOn.store(true);
       /*  saveOutput(p.renderedTestBuffer);*/
     };
