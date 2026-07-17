@@ -10,6 +10,7 @@
 
 #include "InputProcessor.h"
 #include "hitClassifier.h"
+#include "JuceHeader.h"
 /*
 void InputProcessor::activate() {
     isActivated = true;
@@ -52,6 +53,8 @@ void InputProcessor::reset()
     offsetCounter = 0;
     previousAmp = 0.0f;
     baselineAmp = 0;
+    
+    onsetDetector.reset();
 }
 
 void InputProcessor::processSample(float sample, float amp)
@@ -65,27 +68,27 @@ void InputProcessor::processSample(float sample, float amp)
     preRoll[preRollIndex] = sample;
     preRollIndex = (preRollIndex + 1) % preRollSamples;
 
+    // This keeps the internal 50 and 100 sample moving averages up-to-date.
+    bool isTriggerDetected = onsetDetector.processSample(amp);
     // --- Envelope novelty (onset emphasis) ---
     // --- Envelope novelty (Baseline Tracker) ---
     // The baseline slowly chases the current amplitude
-    baselineAmp += trackerSpeed * (amp - baselineAmp);
+    //baselineAmp += trackerSpeed * (amp - baselineAmp);
     
     // Novelty is how far the current amp has spiked ABOVE the slow baseline
-    float novelty = std::max(0.0f, amp - baselineAmp);
+    //float novelty = std::max(0.0f, amp - baselineAmp);
 
     // ===============================
     // ONSET LOGIC (simplified trigger)
     // ===============================
     if (!isActivated)
     {
-        
-        //DBG("novelty and amp: ");
-        //DBG(novelty);
-        //DBG(amp);
         // Trigger on FIRST strong transient, not sustained signal
-        if (amp > onsetThreshold && novelty > noveltyThreshold)
+        if (isTriggerDetected)
+        //if (amp > onsetThreshold && novelty > noveltyThreshold)
         {
             DBG("new hit");
+            DBG("curr sample hit start: " << currSample);
             // --- Activate hit immediately ---
             isActivated = true;
             currHitIndex = 0;
@@ -105,11 +108,63 @@ void InputProcessor::processSample(float sample, float amp)
             }
         }
     }
+    // ===============================
+    // MID-HIT RE-TRIGGER LOGIC
+    // ===============================
+    else
+    {
+        // Enforce a lockout period (e.g. 1024 samples is ~23ms at 44.1kHz).
+        // This allows the initial transient to fully settle before we begin
+        // listening for a second physical hit.
+        constexpr int retriggerLockout = 1024;
+
+        if (currHitIndex > retriggerLockout && isTriggerDetected)
+        {
+            DBG("re-triggered new hit mid-signal (statistical)");
+            DBG("curr sample hit start: " << currSample);
+
+            int hitLength = std::max(0, currHitIndex - preRollSamples);
+            
+            if (hitLength > minHitLength) {
+                // 1. Finalize the current active hit, trimming the pre-roll samples.
+                auto& oldHit = storedHits[storedHitsIndex];
+                oldHit.hitLength = hitLength;
+                storedHitsIndex++;
+            }
+
+            if (storedHitsIndex >= numHits)
+            {
+                isActivated = false;
+            }
+            else
+            {
+                // 2. Initialize the new hit immediately
+                currHitIndex = 0;
+                auto& newHit = storedHits[storedHitsIndex];
+                newHit.onsetSample = std::max(0, currSample - preRollSamples);
+                newHit.buffer.setSize(1, samplesPerHit);
+                newHit.buffer.clear();
+                writePtr = newHit.buffer.getWritePointer(0);
+
+                // 3. Copy the pre-roll samples into the new hit
+                for (int i = 0; i < preRollSamples; ++i)
+                {
+                    
+                    int idx = (preRollIndex + i) % preRollSamples;
+                    writePtr[currHitIndex] = preRoll[idx];
+                    currHitIndex++;
+                }
+
+                offsetCounter = 0; // Reset offset counter for the brand new hit
+            }
+        }
+    }
 
     // ===============================
     // RECORDING LOGIC
     // ===============================
     if (isActivated) {
+        
         if (currHitIndex < samplesPerHit) {
             writePtr[currHitIndex] = sample;
             currHitIndex++;
@@ -120,18 +175,21 @@ void InputProcessor::processSample(float sample, float amp)
         // ===============================
         if (amp < offsetThreshold) {
             offsetCounter++;
-            DBG(offsetCounter);
+            //DBG(offsetCounter);
             if (offsetCounter >= minOffsetSamples) {
-                DBG("hit complete");
-                // --- Finalize hit ---
-                auto& hit = storedHits[storedHitsIndex];
-                hit.hitLength = currHitIndex;
-                DBG("hit length:");
-                DBG(currHitIndex);
+                DBG("curr sample hit complete: " << currSample);
+                
+                if (currHitIndex > minHitLength) {
+                    // --- Finalize hit ---
+                    auto& hit = storedHits[storedHitsIndex];
+                    hit.hitLength = currHitIndex;
+                    //DBG("hit length:");
+                    //DBG(currHitIndex);
 
-                storedHitsIndex++;
-                isActivated = false;
-                offsetCounter = 0;
+                    storedHitsIndex++;
+                    isActivated = false;
+                    offsetCounter = 0;
+                }
             }
         } else {
             offsetCounter = 0;  // Reset if amplitude goes back up
@@ -139,52 +197,6 @@ void InputProcessor::processSample(float sample, float amp)
     }
 }
 
-/*
-void InputProcessor::processSample(float sample, float amp) {
-    if (storedHitsIndex < numHits) {
-        currSample++;
-        
-        if (amp > ampThreshold) {
-            if (isActivated) {
-                addSample(sample);
-            } else {
-                initBuffer();
-                currOnsetSampleCount++;
-                addSample(sample);
-                
-                if (currOnsetSampleCount > minOnsetSamples) {
-                    activate();
-                    currOnsetSampleCount = 0;
-                }
-            }
-        } else {
-            if (isActivated) {
-                addSample(sample);
-                currOffsetSampleCount++;
-                
-                if (currOffsetSampleCount > minOffsetSamples) {
-                    deactivate();
-                }
-            } else if (currOnsetSampleCount > 0) {
-                currOnsetSampleCount = 0;
-                storedHits[storedHitsIndex].buffer.clear();
-            }
-        }
-    }
-}
- */
-//void InputProcessor::classifyStoredHits(double sampleRate)
-//{
-    // storedHitsIndex is how many valid hits you have
-//    for (int i = 0; i < storedHitsIndex; ++i)
- //   {
- //       auto& hit = storedHits[i];
- //       const auto features = HitClassifier::extractFeatures(hit.buffer, hit.hitLength, sampleRate);
- //       hit.type = HitClassifier::classify(features);
-
-    
- //   }
-//}
 juce::AudioBuffer<float> InputProcessor::hitsToBuffer() {
     int totalSamples = 0;
     const int samplesBetweenHits = 40000;
@@ -293,3 +305,49 @@ void InputProcessor::classifyStoredHits(double sampleRate)
 
     //DBG("---- Classification Complete ----");
 }
+
+
+class JuceHfcDetector
+{
+public:
+    // 512 or 1024 is typical for fast transient detection
+    JuceHfcDetector(int fftOrder)
+        : fft(fftOrder)
+        , window(fft.getSize(), juce::dsp::WindowingFunction<float>::hann)
+    {
+        fftBuffer.resize(fft.getSize() * 2, 0.0f);
+    }
+
+    // Call this whenever you have collected a full window of samples (e.g., 512 samples)
+    float calculateHfc(const float* sampleWindow)
+    {
+        // 1. Copy samples and apply Hann window
+        std::memcpy(fftBuffer.data(), sampleWindow, fft.getSize() * sizeof(float));
+        window.multiplyWithWindowingTable(fftBuffer.data(), fft.getSize());
+
+        // 2. Perform forward FFT (in-place)
+        fft.performRealOnlyForwardTransform(fftBuffer.data());
+
+        // fftBuffer now contains interleaved complex numbers: [real0, imag0, real1, imag1, ...]
+        float hfc = 0.0f;
+        int numBins = fft.getSize() / 2;
+
+        // 3. Sum the weighted magnitude of each bin
+        for (int bin = 0; bin < numBins; ++bin)
+        {
+            float real = fftBuffer[2 * bin];
+            float imag = fftBuffer[2 * bin + 1];
+            float magnitude = std::sqrt(real * real + imag * imag);
+
+            // Weight linearly by the bin index (HFC formula)
+            hfc += magnitude * static_cast<float>(bin);
+        }
+
+        return hfc;
+    }
+
+private:
+    juce::dsp::FFT fft;
+    juce::dsp::WindowingFunction<float> window;
+    std::vector<float> fftBuffer;
+};

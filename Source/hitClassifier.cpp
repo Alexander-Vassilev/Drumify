@@ -104,11 +104,12 @@ HitType HitClassifier::classify(const HitFeatures& f)
             
             auto maxIt = std::max_element(avgEnergies.begin(), avgEnergies.end());
             int dominantBand = std::distance(avgEnergies.begin(), maxIt);
-            DBG("dommy mommy: " << dominantBand);
+            //DBG("dommy mommy: " << dominantBand);
             dominantBands.push_back(dominantBand);
         }
         
         std::sort(dominantBands.begin(), dominantBands.end());
+        
         int mostCommonBand = 0;
         int currBand = dominantBands[0];
         int mostTimesOccurring = 0;
@@ -133,7 +134,10 @@ HitType HitClassifier::classify(const HitFeatures& f)
             mostCommonBand = currBand;
         }
         
+        float mean = std::accumulate(dominantBands.begin(), dominantBands.end(), 0.0) / dominantBands.size();
+        mostCommonBand = mean;
         float dominanceRatio = static_cast<float>(mostTimesOccurring) / numWindows;
+        dominanceRatio = 1;
         
         DBG("Energy density located at filterbank #" << mostCommonBand);
         DBG("This corresponds to " << bandIndexToHz(mostCommonBand, 44100) << " hz");

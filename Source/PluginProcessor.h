@@ -78,6 +78,7 @@ public:
     float playbackSpeed = 1;
     std::map<DrumType, int> drumMidiMap;
 private:
+    void reset();
     void analyzeLoadedDrumLoop (const juce::AudioBuffer<float>& loopBuffer);
     void classifyAudioBlock (int channel, const float* inputData, int numSamples);
     void recordAudio(juce::AudioBuffer<float>& buffer);
@@ -116,6 +117,24 @@ private:
                                                     double sampleRate,
                                                     int outputNumSamples);
 
+    static constexpr int fftOrder = 11;
+    static constexpr int fftWindowSize = 1 << fftOrder;
+    static constexpr int fftHopSize = 256;
+    static constexpr int bufferMask = (1 << fftOrder) - 1;
+    
+    int currSampleInFile = 0;
+    float fifoBuffer[fftWindowSize] = {};
+    bool isFifoFilled = false;
+    int fifoIndex = 0;
+    int samplesAccumulated = 0;
+    
+    ComplexOdf complexOnsetDetector { fftOrder }; // Order 10 = size 1024
+    static constexpr float statisticalRatioThreshold = 1.4f; // Adjust this threshold to taste
+    static constexpr float statisticalAbsoluteThreshold = 50.0f; // Adjust this threshold to taste
+    static constexpr int baseMeanLength = 1; // Adjust this threshold to taste
+    static constexpr int historyMeanLength = 6; // Adjust this threshold to taste
+    StatisticalOnsetDetector statisticalDetector { statisticalRatioThreshold, statisticalAbsoluteThreshold, baseMeanLength, historyMeanLength };
+    
     // Rendered playback state
     juce::AudioBuffer<float> renderedDrumBuffer;
     int renderedReadPos = 0;

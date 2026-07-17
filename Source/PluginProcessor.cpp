@@ -95,6 +95,14 @@ void HackBrownAudioProcessor::changeProgramName(int index, const juce::String& n
 
 //==============================================================================
 
+void HackBrownAudioProcessor::reset()
+{
+    // ... other resets ...
+    isFifoFilled = false;
+    samplesAccumulated = 0;
+    std::fill(std::begin(fifoBuffer), std::end(fifoBuffer), 0.0f);
+}
+
 void HackBrownAudioProcessor::getLongestSampleLengthInSamples()
 {
     int maxLength = 0;
@@ -422,13 +430,50 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
 
 void HackBrownAudioProcessor::classifyAudioBlock (int channel, const float* inputData, int numSamples)
 {
+    if (channel != 0) return;
+    
     // Process the block sample-by-sample, exactly like your realtime function did
-    for (int sample = 0; sample < numSamples; sample++)
+    for (int i = 0; i < numSamples; i++)
     {
+        currSampleInFile++;
+        float sample = inputData[i];
+        
+        fifoBuffer[fifoIndex] = sample;
+        fifoIndex++;
+        fifoIndex &= bufferMask;
+        
+        samplesAccumulated++;
+        
+        if (!isFifoFilled && samplesAccumulated >= fftWindowSize) {
+            isFifoFilled = true;
+        }
+        
+        // Not doing an else because if we enter the first if statement we need to be able to enter this one
+        if (isFifoFilled) {
+            if (samplesAccumulated >= fftHopSize) {
+                float analysisWindow[fftWindowSize];
+                
+                for (int j = 0; j < fftWindowSize; j++) {
+                    analysisWindow[j] = fifoBuffer[(fifoIndex + j) & bufferMask];
+                }
+                
+                float odfValue = complexOnsetDetector.processFrame(analysisWindow, currSampleInFile);
+                bool onsetConfirmed = statisticalDetector.processSample(odfValue);
+                
+                //DBG("ODF: " << odfValue << ", sample #" << currSampleInFile);
+                //DBG(odfValue);
+                
+                if (onsetConfirmed) {
+                    int compensatedOnset = currSampleInFile - 1600;
+                    DBG("Onset detected at sample index: " << compensatedOnset);
+                }
+                
+                samplesAccumulated = 0;
+            }
+        }
         // Channel 0 used for mono analysis
-        float amp = envelopeFollower.processSample (0, inputData[sample]);
-        //DBG(amp);
-        inputProcessor.processSample (inputData[sample], amp);
+        //float amp = envelopeFollower.processSample (0, inputData[sample]);
+        //inputProcessor.processSample (inputData[sample], amp);
     }
 }
 
@@ -451,7 +496,7 @@ void HackBrownAudioProcessor::recordAudio(juce::AudioBuffer<float>& buffer) {
 
     auto* inputData = buffer.getReadPointer(0);
 
-    for (int channel = 0; channel < totalNumOutputChannels; ++channel) {
+    for (int channel = 0; channel < 1; ++channel) {
         float* channelData = buffer.getWritePointer(channel);
 
         // Only process if we have a corresponding input channel
