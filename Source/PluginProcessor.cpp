@@ -311,6 +311,8 @@ void HackBrownAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlo
     getLongestSampleLengthInSamples();
     
     currentSampleRate = sampleRate;
+    
+    logFile.open(file.getFullPathName().toStdString(), std::ios::out | std::ios::trunc);
     //makeTestRender(); //TEMP, remove it later!!
 }
 
@@ -458,13 +460,14 @@ void HackBrownAudioProcessor::classifyAudioBlock (int channel, const float* inpu
                 }
                 
                 float odfValue = complexOnsetDetector.processFrame(analysisWindow, currSampleInFile);
-                bool onsetConfirmed = statisticalDetector.processSample(odfValue);
+                bool onsetConfirmed = statisticalDetector.processSample(odfValue, currSampleInFile);
                 
                 //DBG("ODF: " << odfValue << ", sample #" << currSampleInFile);
                 //DBG(odfValue);
+                logFile << odfValue << std::endl;
                 
                 if (onsetConfirmed) {
-                    int compensatedOnset = currSampleInFile - 1600;
+                    int compensatedOnset = currSampleInFile - 1500;
                     DBG("Onset detected at sample index: " << compensatedOnset);
                 }
                 

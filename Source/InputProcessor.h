@@ -34,7 +34,7 @@ class ComplexOdf
 {
 public:
     // fftOrder of 10 (1024 samples) is standard for transient detection
-    ComplexOdf(int fftOrder)
+    ComplexOdf(int fftOrder, double sampleRate)
         : fft(fftOrder)
         , window(fft.getSize(), juce::dsp::WindowingFunction<float>::hann)
     {
@@ -50,19 +50,54 @@ public:
         // Allocate workspace for FFT
         fftBuffer.resize(fftSize * 2, 0.0f);
 
+        setupBinWeights(sampleRate);
+        
         // Initialize historical arrays
-        prevMag.resize(numBins, 0.0f);
+        prevMag1.resize(numBins, 0.0f);
+        prevMag2.resize(numBins, 0.0f);
+        prevMag3.resize(numBins, 0.0f);
         prevPhase1.resize(numBins, 0.0f);
         prevPhase2.resize(numBins, 0.0f);
     }
 
     void reset()
     {
-        std::fill(prevMag.begin(), prevMag.end(), 0.0f);
+        std::fill(prevMag1.begin(), prevMag1.end(), 0.0f);
+        std::fill(prevMag2.begin(), prevMag2.end(), 0.0f);
+        std::fill(prevMag3.begin(), prevMag3.end(), 0.0f);
         std::fill(prevPhase1.begin(), prevPhase1.end(), 0.0f);
         std::fill(prevPhase2.begin(), prevPhase2.end(), 0.0f);
     }
 
+    void setupBinWeights(double sampleRate)
+    {
+        binWeights.resize(numBins);
+        
+        // Frequency spacing per bin = sampleRate / fftSize
+        const float binToHz = static_cast<float>(sampleRate) / static_cast<float>(fftSize);
+        const float maxWeight = 1.0f; // The maximum boost at 10 kHz and above
+
+        for (int bin = 0; bin < numBins; ++bin)
+        {
+            float freq = static_cast<float>(bin) * binToHz;
+            
+            if (freq < 0) { // potential brickwall highpass filter
+                binWeights[bin] = 0;
+            } else {
+                // 1. Normalize the frequency range [8,000Hz to 10,000Hz] to [0.0 to 1.0]
+                // Range width is 2,000Hz
+                float t = (freq - 8000.0f) / 2000.0f;
+                t = std::clamp(t, 0.0f, 1.0f); // Clamps below 8kHz to 0, and above 10kHz to 1
+
+                // 2. Smoothstep S-curve polynomial
+                float s = t * t * (3.0f - 2.0f * t);
+
+                // 3. Map S-curve [0.0, 1.0] to weight range [1.0, maxWeight]
+                binWeights[bin] = 1.0f + (maxWeight - 1.0f) * s;
+            }
+        }
+    }
+    
     // Call this frame-by-frame with a window of size 1024.
     // Typically, you overlap windows (e.g., hop size of 256 or 512 samples).
     float processFrame(const float* sampleWindow, const int currSample)
@@ -70,12 +105,27 @@ public:
         // 1. Copy samples and apply the window function
         std::memcpy(fftBuffer.data(), sampleWindow, fftSize * sizeof(float));
         window.multiplyWithWindowingTable(fftBuffer.data(), fftSize);
-
-        // 2. Perform Real-to-Complex FFT (in-place)
         fft.performRealOnlyForwardTransform(fftBuffer.data());
 
         float odfValue = 0.0f;
         const bool writeToFile = logFile.is_open();
+        float numBinsReciprocal = 1.0f / static_cast<float>(numBins);
+        float distanceScalingFactor = 0;
+        const float reciprocalThree = 1.0f / 3.0f;
+        
+        // --- Pass 1: Calculate raw magnitudes and find the total frame energy ---
+        std::vector<float> currentMags(numBins);
+        float totalEnergy = 0.0f;
+
+        for (int bin = 0; bin < numBins; ++bin)
+        {
+            float real = fftBuffer[2 * bin];
+            float imag = fftBuffer[2 * bin + 1];
+            currentMags[bin] = std::sqrt(real * real + imag * imag);
+            totalEnergy += currentMags[bin];
+        }
+        
+        float normFactor = 1.0f / (totalEnergy + 0.05f);
         
         if (writeToFile) {
             logFile << std::fixed << std::setprecision(0) << std::setw(10) << currSample << " ";
@@ -84,12 +134,22 @@ public:
         // 3. Calculate distance between predicted steady-state and actual complex vector
         for (int bin = 0; bin < numBins; ++bin)
         {
+            float mag = currentMags[bin];
             // JUCE FFT output format: interleaved real/imaginary values
             float real = fftBuffer[2 * bin];
             float imag = fftBuffer[2 * bin + 1];
             
+            // Fetch the last 3 magnitude instances
+            float m1 = prevMag1[bin];
+            float m2 = prevMag2[bin];
+            float m3 = prevMag3[bin];
+            float meanPrev = (m1 + m2 + m3) * reciprocalThree;
+            
             // Actual magnitude and phase for current frame
-            float mag = std::sqrt(real * real + imag * imag);
+            //float mag = std::sqrt(real * real + imag * imag);
+            // Logarithmic compression: log1p(x) calculates ln(1 + x) safely.
+            // 1000.0f is the compression factor; higher values boost quiet sounds more.
+            //mag = std::log1p(1000.0f * mag);
             float phase = std::atan2(imag, real);
 
             // --- Write magnitude to file ---
@@ -100,7 +160,7 @@ public:
             }
             
             // Fetch historical values
-            float mPrev = prevMag[bin];
+            //float mPrev = prevMag[bin];
             float pPrev1 = prevPhase1[bin]; // Phase at t-1
             float pPrev2 = prevPhase2[bin]; // Phase at t-2
 
@@ -114,18 +174,31 @@ public:
             // Euclidean distance squared in polar coordinates:
             // |Actual - Expected|^2 = R1^2 + R2^2 - 2*R1*R2*cos(theta1 - theta2)
             //float distance = abs(mPrev - std::polar(mag, phase - targetPhase));
-            float distance = abs(mPrev - mag);
+            float distance = abs(meanPrev - mag);
+            //const float epsilon = 0.001f; // Prevents division by zero and stabilizes noise floor
+            //float distance = std::abs(mag - meanPrev) / (mag + meanPrev + epsilon);
+            
             //float distSquared = (mag * mag) + (mPrev * mPrev) - (2.0f * mag * mPrev * std::cos(phaseDeviation));
             
             // Protect against tiny negative values caused by floating-point math
             //float dist = std::sqrt(std::max(0.0f, distSquared));
+            
+            
+            //float binOrdinalityRatio = bin * numBinsReciprocal;
+            //float distanceScalingFactor = 1.0f + 4.0f * binOrdinalityRatio;
+            // 4. Instant O(1) array lookup for the S-curve weight
+            float distanceScalingFactor = binWeights[bin];
 
-            odfValue += distance;
+            odfValue += distanceScalingFactor * distance;
 
             // 4. Update phase/magnitude history for the next frame
             prevPhase2[bin] = pPrev1;
             prevPhase1[bin] = phase;
-            prevMag[bin] = mag;
+            
+            // Update history (shift values back)
+            prevMag3[bin] = m2;
+            prevMag2[bin] = m1;
+            prevMag1[bin] = mag;
         }
         
         // End the line for this frame (moving to the next row)
@@ -147,10 +220,13 @@ private:
     static constexpr float pi = juce::MathConstants<float>::pi;
     
     std::vector<float> fftBuffer;
+    std::vector<float> binWeights;
     std::ofstream logFile;
     
     // Historical states per frequency bin
-    std::vector<float> prevMag;
+    std::vector<float> prevMag1; // t - 1
+    std::vector<float> prevMag2; // t - 2
+    std::vector<float> prevMag3; // t - 3
     std::vector<float> prevPhase1; // Phase (t-1)
     std::vector<float> prevPhase2; // Phase (t-2)
 };
@@ -158,7 +234,6 @@ private:
 class FastMovingAverage
 {
 public:
-    // Initialize with the desired window size
     FastMovingAverage(int windowSize)
         : size(std::max(1, windowSize)), invSize(1.0 / size)
     {
@@ -169,59 +244,103 @@ public:
     {
         std::fill(buffer.begin(), buffer.end(), 0.0f);
         runningSum = 0.0;
+        runningSquareSum = 0.0; // Reset squares
         writeIndex = 0;
         sampleCounter = 0;
+        count = 0;
     }
 
-    // Call this for every sample. Returns the current average.
+    // Call this for every sample. Returns the current average (mean).
     float push(float sample)
     {
-        // 1. Subtract the oldest sample leaving the window
-        runningSum -= buffer[writeIndex];
-        
-        // 2. Overwrite with the new sample
+        const float oldest = buffer[writeIndex];
+
+        // 1. Update running sum of values
+        runningSum -= oldest;
         buffer[writeIndex] = sample;
-        
-        // 3. Add the new sample to the sum
         runningSum += sample;
 
-        // 4. Wrap the circular buffer pointer
+        // 2. Update running sum of squared values
+        runningSquareSum -= (static_cast<double>(oldest) * oldest);
+        runningSquareSum += (static_cast<double>(sample) * sample);
+
+        // 3. Wrap circular index
         writeIndex++;
         if (writeIndex >= size) {
             writeIndex = 0;
         }
 
-        // 5. Periodically clear accumulated floating-point rounding errors
+        // 4. Periodically clear accumulated float drift for both sums
         sampleCounter++;
         if (sampleCounter >= 2048)
         {
             double exactSum = 0.0;
+            double exactSquareSum = 0.0;
             for (float val : buffer) {
                 exactSum += val;
+                exactSquareSum += (static_cast<double>(val) * val);
             }
             runningSum = exactSum;
+            runningSquareSum = exactSquareSum;
             sampleCounter = 0;
         }
 
-        // 6. Return the average (multiplication is faster than division)
+        if (count < size) {
+            count++;
+        }
+
+        // Returns current mean
+        return getMean();
+    }
+
+    // Get the current Mean - O(1)
+    float getMean() const
+    {
+        if (count == 0) return 0.0f;
+        if (count < size) return static_cast<float>(runningSum / count);
         return static_cast<float>(runningSum * invSize);
+    }
+
+    // Get the current Variance - O(1)
+    float getVariance() const
+    {
+        const int currentCount = (count < size) ? count : size;
+        if (currentCount <= 1) return 0.0f; // Variance of 0 or 1 samples is 0
+
+        const double inv = 1.0 / currentCount;
+        const double mean = runningSum * inv;
+        const double meanOfSquares = runningSquareSum * inv;
+
+        // Prevent catastrophic cancellation (negative variance)
+        return static_cast<float>(std::max(0.0, meanOfSquares - (mean * mean)));
+    }
+
+    // Get the Standard Deviation (Square root of Variance) - O(1)
+    float getStandardDeviation() const
+    {
+        return std::sqrt(getVariance());
     }
 
 private:
     int size;
     double invSize;
     std::vector<float> buffer;
-    double runningSum = 0.0; // Double-precision limits rounding drift
+    
+    double runningSum = 0.0;
+    double runningSquareSum = 0.0; // Accumulates squares
+    
     int writeIndex = 0;
     int sampleCounter = 0;
+    int count = 0;
 };
 
 class StatisticalOnsetDetector
 {
 public:
-    StatisticalOnsetDetector(float ratioThreshold, float absoluteThreshold, int baseMeanLength = 50, int historyMeanLength = 100)
-        : baseSMA(baseMeanLength)              // Tracks immediate energy (50 samples ~1.1ms at 44.1kHz)
-        , historyMeanSMA(historyMeanLength)    // Tracks longer historical baseline (100 averages)
+    StatisticalOnsetDetector(float ratioThreshold, float absoluteThreshold, int baseMeanLength = 1, int mediumHistoryMeanLength = 6, int longHistoryMeanLength = 40)
+        : baseSMA(baseMeanLength)              // Tracks immediate energy (Small amt ODF samples)
+        , mediumHistoryMeanSMA(mediumHistoryMeanLength)    // Tracks longer historical baseline (5-10x base)
+        , longHistoryMeanSMA(longHistoryMeanLength)     // Tracks EVEN longer historical baseline (5-10x medium)
         , ratioThreshold(ratioThreshold)
         , absoluteThreshold(absoluteThreshold)
     {
@@ -231,10 +350,13 @@ public:
     void reset()
     {
         baseSMA.reset();
-        historyMeanSMA.reset();
+        mediumHistoryMeanSMA.reset();
+        longHistoryMeanSMA.reset();
         isTentative = false;
         savedMean = 0.0f;
         consecutiveOverCounter = 0;
+        prevVariance1 = 0.0f;
+        prevVariance2 = 0.0f;
     }
 
     void setRatioThreshold(float newThreshold)
@@ -243,26 +365,38 @@ public:
     }
 
     // Pass the current sample amplitude. Returns 'true' on the exact sample the hit is confirmed.
-    bool processSample(float amp)
+    bool processSample(float amp, int sampleCount)
     {
         // 1. Calculate the current 50-sample average
         float currentSMA = baseSMA.push(amp);
-
-        // 2. Calculate the mean of the last 100 averages (running in O(1) time)
-        float historyMean = historyMeanSMA.push(currentSMA);
-        //DBG("long-term avg: " << historyMean << " short-term avg: " << currentSMA);
+        float mediumHistoryMean = mediumHistoryMeanSMA.push(currentSMA);
+        float longHistoryMean = longHistoryMeanSMA.push(currentSMA);
+        
+        // Get the current variance and fetch the variance from 2 samples ago
+        float currentVariance = mediumHistoryMeanSMA.getVariance();
+        float varianceTwoSamplesAgo = prevVariance2;
+        
+        //DBG("long-term avg: " << historyMean << " short-term avg: " << currentSMA << " ODF: " << amp << " sample #" << sampleCount);
+        if (true)
+        DBG (juce::String::formatted (
+            "sample #: %-8d | short-term avg: %-12.4f | long-term avg: %-12.4f | VERY long-term avg: %-12.4f | Variance: %-10.4f",
+            sampleCount, currentSMA, mediumHistoryMean, longHistoryMean, mediumHistoryMeanSMA.getVariance()
+        ));
         
         bool onsetConfirmed = false;
 
         if (!isTentative)
         {
-            float meanRatio = currentSMA / historyMean;
+            float mediumMeanRatio = currentSMA / mediumHistoryMean;
+            float longMeanRatio = currentSMA / longHistoryMean;
+            float meanGain = currentSMA - mediumHistoryMean;
+            bool longTermTrigger = (mediumMeanRatio > 1.1 && longMeanRatio > 1.4) && (varianceTwoSamplesAgo < 25000);
             
             // If the current average spikes significantly above the running history mean
-            if (meanRatio > ratioThreshold && currentSMA > absoluteThreshold)
+            if ((mediumMeanRatio > ratioThreshold || longTermTrigger) && (currentSMA > absoluteThreshold))
             {
                 isTentative = true;
-                savedMean = historyMean; // Lock in the baseline mean at the moment of the spike
+                savedMean = mediumHistoryMean; // Lock in the baseline mean at the moment of the spike
                 consecutiveOverCounter = 1;
             }
         }
@@ -288,19 +422,28 @@ public:
                 consecutiveOverCounter = 0;
             }
         }
+        
+        // --- Shift the delay line history at the very end of processing ---
+        prevVariance2 = prevVariance1;
+        prevVariance1 = currentVariance;
 
         return onsetConfirmed;
     }
 
 private:
     FastMovingAverage baseSMA;
-    FastMovingAverage historyMeanSMA;
+    FastMovingAverage mediumHistoryMeanSMA;
+    FastMovingAverage longHistoryMeanSMA;
     
+    float longHistoryThreshold = 1.4f;
     float ratioThreshold;
     float absoluteThreshold;
     bool isTentative = false;
     float savedMean = 0.0f;
     int consecutiveOverCounter = 0;
+    
+    float prevVariance1 = 0.0f; // Variance from 1 sample ago (z^-1)
+    float prevVariance2 = 0.0f; // Variance from 2 samples ago (z^-2)
 };
 
 
@@ -381,5 +524,5 @@ private:
     static constexpr int historyMeanLength = 1000; // Adjust this threshold to taste
     StatisticalOnsetDetector onsetDetector { statisticalRatioThreshold, statisticalAbsoluteThreshold, baseMeanLength, historyMeanLength };
     
-    ComplexOdf complexOnsetDetector{10};
+    ComplexOdf complexOnsetDetector{10, 44100};
 };

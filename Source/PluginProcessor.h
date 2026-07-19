@@ -128,12 +128,13 @@ private:
     int fifoIndex = 0;
     int samplesAccumulated = 0;
     
-    ComplexOdf complexOnsetDetector { fftOrder }; // Order 10 = size 1024
-    static constexpr float statisticalRatioThreshold = 1.4f; // Adjust this threshold to taste
-    static constexpr float statisticalAbsoluteThreshold = 50.0f; // Adjust this threshold to taste
+    ComplexOdf complexOnsetDetector { fftOrder, currentSampleRate }; // Order 10 = size 1024
+    static constexpr float statisticalRatioThreshold = 1.5f; // Adjust this threshold to taste
+    static constexpr float statisticalAbsoluteThreshold = 220.0f; // Adjust this threshold to taste
     static constexpr int baseMeanLength = 1; // Adjust this threshold to taste
-    static constexpr int historyMeanLength = 6; // Adjust this threshold to taste
-    StatisticalOnsetDetector statisticalDetector { statisticalRatioThreshold, statisticalAbsoluteThreshold, baseMeanLength, historyMeanLength };
+    static constexpr int mediumHistoryMeanLength = 6; // Adjust this threshold to taste
+    static constexpr int longHistoryMeanLength = 20; // Adjust this threshold to taste
+    StatisticalOnsetDetector statisticalDetector { statisticalRatioThreshold, statisticalAbsoluteThreshold, baseMeanLength, mediumHistoryMeanLength, longHistoryMeanLength };
     
     // Rendered playback state
     juce::AudioBuffer<float> renderedDrumBuffer;
@@ -142,6 +143,10 @@ private:
     
     // Filter
     juce::dsp::IIR::Filter<float> bellFilter;
+    
+    std::ofstream logFile;
+    juce::File file = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+                .getChildFile("ODFAnalysis/ODFValues_beatbox.txt");
     
     bool playprint = true;
 

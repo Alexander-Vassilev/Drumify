@@ -69,7 +69,7 @@ void InputProcessor::processSample(float sample, float amp)
     preRollIndex = (preRollIndex + 1) % preRollSamples;
 
     // This keeps the internal 50 and 100 sample moving averages up-to-date.
-    bool isTriggerDetected = onsetDetector.processSample(amp);
+    bool isTriggerDetected = onsetDetector.processSample(amp, 0);
     // --- Envelope novelty (onset emphasis) ---
     // --- Envelope novelty (Baseline Tracker) ---
     // The baseline slowly chases the current amplitude
