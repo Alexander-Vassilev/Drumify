@@ -179,6 +179,27 @@ void InputProcessor::processSample(float sample, float amp, bool externalTrigger
     }
 }
 
+void InputProcessor::flush()
+{
+    if (isActivated)
+    {
+        // Force-finalize the final hanging hit
+        if (currHitIndex > minHitLength)
+        {
+            DBG("File finished: Forcing finalization of last hit. Length: " << currHitIndex);
+            
+            auto& hit = storedHits[storedHitsIndex];
+            hit.hitLength = currHitIndex;
+            
+            storedHitsIndex++;
+        }
+        
+        // Reset state
+        isActivated = false;
+        offsetCounter = 0;
+    }
+}
+
 juce::AudioBuffer<float> InputProcessor::hitsToBuffer() {
     int totalSamples = 0;
     const int samplesBetweenHits = 40000;
@@ -215,7 +236,8 @@ void InputProcessor::classifyStoredHits(double sampleRate)
     classifiedHits.clear();
     classifiedHits.reserve(storedHitsIndex);
 
-    //DBG("---- Classifying Stored Hits ----");
+    DBG("---- Classifying Stored Hits ----");
+    DBG(storedHitsIndex << " Hits classified");
     //storedHitsIndex = 1;
     
     for (int i = 0; i < storedHitsIndex; ++i)

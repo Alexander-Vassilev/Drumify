@@ -461,7 +461,6 @@ public:
 
         return onsetConfirmed;
     }
-
 private:
     FastMovingAverage baseSMA;
     FastMovingAverage mediumHistoryMeanSMA;
@@ -488,6 +487,7 @@ public:
     void processSampleHFC(	float sample, float amp);
     void initBuffer();
     void reset();
+    void flush();
     
     juce::AudioBuffer<float> hitsToBuffer();
     

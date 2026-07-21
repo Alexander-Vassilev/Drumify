@@ -195,6 +195,7 @@ void HackBrownAudioProcessor::analyzeLoadedDrumLoop (const juce::AudioBuffer<flo
         classifyAudioBlock (0, chunkPtr, samplesToProcess);
     }
     
+    inputProcessor.flush();
     reconstructLoopFromHits();
     DBG ("Drum loop analysis finished!");
 }
