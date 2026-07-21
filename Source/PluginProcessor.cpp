@@ -98,8 +98,9 @@ void HackBrownAudioProcessor::changeProgramName(int index, const juce::String& n
 void HackBrownAudioProcessor::reset()
 {
     // ... other resets ...
-    isFifoFilled = false;
+    isFifoFilled = true;
     samplesAccumulated = 0;
+    fifoIndex = 0;
     std::fill(std::begin(fifoBuffer), std::end(fifoBuffer), 0.0f);
 }
 
@@ -434,7 +435,6 @@ void HackBrownAudioProcessor::classifyAudioBlock (int channel, const float* inpu
 {
     if (channel != 0) return;
     
-    // Process the block sample-by-sample, exactly like your realtime function did
     for (int i = 0; i < numSamples; i++)
     {
         currSampleInFile++;
@@ -446,37 +446,33 @@ void HackBrownAudioProcessor::classifyAudioBlock (int channel, const float* inpu
         
         samplesAccumulated++;
         
-        if (!isFifoFilled && samplesAccumulated >= fftWindowSize) {
-            isFifoFilled = true;
-        }
+        bool onsetConfirmedThisSample = false;
         
-        // Not doing an else because if we enter the first if statement we need to be able to enter this one
-        if (isFifoFilled) {
-            if (samplesAccumulated >= fftHopSize) {
-                float analysisWindow[fftWindowSize];
-                
-                for (int j = 0; j < fftWindowSize; j++) {
-                    analysisWindow[j] = fifoBuffer[(fifoIndex + j) & bufferMask];
-                }
-                
-                float odfValue = complexOnsetDetector.processFrame(analysisWindow, currSampleInFile);
-                bool onsetConfirmed = statisticalDetector.processSample(odfValue, currSampleInFile);
-                
-                //DBG("ODF: " << odfValue << ", sample #" << currSampleInFile);
-                //DBG(odfValue);
-                logFile << odfValue << std::endl;
-                
-                if (onsetConfirmed) {
-                    int compensatedOnset = currSampleInFile - 1500;
-                    DBG("Onset detected at sample index: " << compensatedOnset);
-                }
-                
-                samplesAccumulated = 0;
+        // Because we primed the FIFO, we trigger our very first FFT after only 256 samples
+        if (samplesAccumulated >= fftHopSize)
+        {
+            float analysisWindow[fftWindowSize];
+            
+            for (int j = 0; j < fftWindowSize; j++) {
+                analysisWindow[j] = fifoBuffer[(fifoIndex + j) & bufferMask];
             }
+            
+            float odfValue = complexOnsetDetector.processFrame(analysisWindow, currSampleInFile);
+            onsetConfirmedThisSample = statisticalDetector.processSample(odfValue, currSampleInFile);
+            
+            logFile << odfValue << std::endl;
+            
+            if (onsetConfirmedThisSample) {
+                int compensatedOnset = currSampleInFile - 1500;
+                DBG("Onset detected at sample index: " << compensatedOnset);
+            }
+            
+            samplesAccumulated = 0;
         }
-        // Channel 0 used for mono analysis
-        //float amp = envelopeFollower.processSample (0, inputData[sample]);
-        //inputProcessor.processSample (inputData[sample], amp);
+
+        // Process every sample (including the very first ones) into the InputProcessor
+        float amp = envelopeFollower.processSample (0, sample);
+        inputProcessor.processSample (sample, amp, onsetConfirmedThisSample);
     }
 }
 

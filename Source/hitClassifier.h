@@ -14,6 +14,14 @@ enum class HitType
     Unknown = 43
 };
 
+struct PooledHitFeatures
+{
+    float meanCentroid = 0.0f;
+    float centroidStdDev = 0.0f;
+    float centroidDelta = 0.0f;
+    float meanLowMidProminence = 0.0f;
+};
+
 struct HitFeatures
 {
     float rms = 0.0f;
@@ -26,6 +34,58 @@ struct HitFeatures
     std::vector<std::array<float, FFTProcessor::numBins>> stftData{};
 };
 
+class DrumFeatureExtractor
+{
+public:
+    // Calculates the sharpness of the low-mid resonance
+    static float calculateLowMidProminence(const std::array<float, FFTProcessor::numBins>& magnitudes, float sampleRate, int fftSize)
+    {
+        const int numBins = magnitudes.size();
+        const float binToHz = sampleRate / static_cast<float>(fftSize);
+        const float noiseFloor = 0.01f; // Ignore silent bins
+
+        int startBin = std::max(2, static_cast<int>(100.0f / binToHz));
+        int endBin = std::min(numBins - 3, static_cast<int>(800.0f / binToHz));
+
+        float maxProminence = 1.0f;
+
+        for (int bin = startBin; bin <= endBin; ++bin)
+        {
+            float mag = magnitudes[bin];
+
+            // Local peak condition
+            if (mag > noiseFloor && mag > magnitudes[bin - 1] && mag > magnitudes[bin + 1])
+            {
+                float localAvg = (magnitudes[bin - 2] + magnitudes[bin - 1] +
+                                  magnitudes[bin + 1] + magnitudes[bin + 2]) * 0.25f;
+
+                float prominence = mag / (localAvg + 1e-5f);
+                if (prominence > maxProminence) {
+                    maxProminence = prominence;
+                }
+            }
+        }
+
+        return maxProminence;
+    }
+
+    // Calculates the centroid (brightness) of the filterbank
+    template <size_t numFilters>
+    static float calculateSpectralCentroid(const std::array<float, numFilters>& filterbank)
+    {
+        float weightedSum = 0.0f;
+        float totalSum = 0.0f;
+        
+        for (size_t j = 0; j < numFilters; j++)
+        {
+            float energy = filterbank[j];
+            weightedSum += static_cast<float>(j) * energy;
+            totalSum += energy;
+        }
+        
+        return (totalSum > 1e-5f) ? (weightedSum / totalSum) : 0.0f;
+    }
+};
 
 class HitClassifier
 {

@@ -17,12 +17,21 @@ std::array<float, numFilters> applyMelFilterbank(const std::array<float, FFTProc
     const float nyquist = sampleRate / 2.0f;
     const float melMin = hzToMel(50.0f);
     const float melMax = hzToMel(nyquist);
+    //std::cout << "applying mel filter\n";
+    //for (int i = 0; i < numFilters + 2; i++) {
+    //    std::cout << std::fixed << std::setprecision(1) << std::setw(6) << i << " ";
+    //}
+    
+    //std::cout << std::endl;
     
     std::array<float, numFilters + 2> centerHz;
     for (int i = 0; i < numFilters + 2; i++) {
-       float mel = melMin + (melMax - melMin) * i / (numFilters + 1);
-       centerHz[i] = melToHz(mel);
+        float mel = melMin + (melMax - melMin) * i / (numFilters + 1);
+        centerHz[i] = melToHz(mel);
+        //std::cout << std::fixed << std::setprecision(0) << std::setw(6) << centerHz[i] << " ";
     }
+    
+    //std::cout << std::endl;
     
     auto hzToBin = [&](float hz) {
        return (int)(hz / nyquist * (FFTProcessor::numBins - 1));

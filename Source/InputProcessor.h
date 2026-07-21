@@ -72,10 +72,11 @@ public:
     void setupBinWeights(double sampleRate)
     {
         binWeights.resize(numBins);
+        binWeightSum = 0;
         
         // Frequency spacing per bin = sampleRate / fftSize
         const float binToHz = static_cast<float>(sampleRate) / static_cast<float>(fftSize);
-        const float maxWeight = 1.0f; // The maximum boost at 10 kHz and above
+        const float maxWeight = 10.0f; // The maximum boost at 10 kHz and above
 
         for (int bin = 0; bin < numBins; ++bin)
         {
@@ -95,6 +96,9 @@ public:
                 // 3. Map S-curve [0.0, 1.0] to weight range [1.0, maxWeight]
                 binWeights[bin] = 1.0f + (maxWeight - 1.0f) * s;
             }
+            
+            //DBG("bin " << bin << " gets weight of " << binWeights[bin]);
+            binWeightSum += binWeights[bin];
         }
     }
     
@@ -130,6 +134,9 @@ public:
         if (writeToFile) {
             logFile << std::fixed << std::setprecision(0) << std::setw(10) << currSample << " ";
         }
+        
+        int changedBinsCount = 0;
+        const float noiseFloor = 0.01f;
 
         // 3. Calculate distance between predicted steady-state and actual complex vector
         for (int bin = 0; bin < numBins; ++bin)
@@ -187,9 +194,27 @@ public:
             //float binOrdinalityRatio = bin * numBinsReciprocal;
             //float distanceScalingFactor = 1.0f + 4.0f * binOrdinalityRatio;
             // 4. Instant O(1) array lookup for the S-curve weight
-            float distanceScalingFactor = binWeights[bin];
 
-            odfValue += distanceScalingFactor * distance;
+            odfValue += distance;
+            
+            if (mag > noiseFloor || meanPrev > noiseFloor)
+            {
+                // Ratio calculation
+                float ratio = mag / (meanPrev + 1e-5f); // 1e-5 prevents division by zero
+                float binContributionFactor = binWeights[bin];
+                binContributionFactor = 1;
+                
+                if (ratio > 1.5f || ratio < 0.6667f)
+                {
+                    changedBinsCount += binContributionFactor;
+                }
+                
+                //float binFrequencyRatio = static_cast<float>(bin) / static_cast<float>(numBins);
+                
+                //if ((ratio > 2.0f || ratio < 0.5f) && (binFrequencyRatio < 0.05f)) {
+                //    changedBinsCount += 2;
+                //}
+            }
 
             // 4. Update phase/magnitude history for the next frame
             prevPhase2[bin] = pPrev1;
@@ -200,6 +225,12 @@ public:
             prevMag2[bin] = m1;
             prevMag1[bin] = mag;
         }
+        
+        float proportion = static_cast<float>(changedBinsCount) / static_cast<float>(numBins);
+        float widthMultiplier = 1.0f + 50.0f * proportion;
+        //DBG(changedBinsCount);
+        //widthMultiplier = binWeights[std::max(changedBinsCount - 1, 0)];
+        odfValue *= widthMultiplier;
         
         // End the line for this frame (moving to the next row)
         if (writeToFile)
@@ -221,6 +252,7 @@ private:
     
     std::vector<float> fftBuffer;
     std::vector<float> binWeights;
+    float binWeightSum = 0;
     std::ofstream logFile;
     
     // Historical states per frequency bin
@@ -452,7 +484,7 @@ public:
     void activate();
     void deactivate();
     void addSample(float sample);
-    void processSample(float sample, float amp);
+    void processSample(float sample, float amp, bool externalTrigger);
     void processSampleHFC(	float sample, float amp);
     void initBuffer();
     void reset();
@@ -487,7 +519,7 @@ private:
 
     // --- Detection parameters ---
     static constexpr float onsetThreshold  = 0.05f;
-    static constexpr float offsetThreshold = 0.025f;
+    static constexpr float offsetThreshold = 0.005f;
     //static constexpr float noveltyThreshold = 0.015f;
     static constexpr float noveltyThreshold = 0.007f;
 
@@ -496,11 +528,15 @@ private:
 
     // --- Buffering ---
     static constexpr int samplesPerHit   = 65536;
-    static constexpr int preRollSamples  = 256;
 
-
+    static constexpr int preRollSamples  = 4096;
     float preRoll[preRollSamples] = {};
     int preRollIndex = 0;
+    
+    // Latency constants
+    static constexpr int onsetLatency   = 1500; // Latency of the FFT + ODF + Statistical detector
+    static constexpr int padBeforeOnset  = 256;  // Silence cushion before the transient
+    static constexpr int totalDelay      = onsetLatency + padBeforeOnset; // 1756 samples total
 
     float* writePtr = nullptr;
 
@@ -514,7 +550,7 @@ private:
     float previousAmp = 0.0f;
     float baselineAmp = 0.0f;
     float trackerSpeed = 0.005f;
-    int minHitLength = 750; // In Samples
+    int minHitLength = 512; // In Samples
 
     bool isActivated = false;
     

@@ -155,6 +155,19 @@ void HackBrownAudioProcessorEditor::paint (juce::Graphics& g)
         g.setFont (font);
         //g.drawFittedText ("DRUMIFY", getLocalBounds(), juce::Justification::centred, 1);
     }
+    
+    if (isDragging)
+    {
+        // Draw a highlighting overlay when dragging a file over the UI
+        g.setColour (juce::Colours::orange.withAlpha (0.2f));
+        g.fillAll();
+
+        g.setColour (juce::Colours::orange);
+        g.drawRect (getLocalBounds(), 3); // 3-pixel border
+        
+        g.setFont (18.0f);
+        g.drawText ("Drop your audio loop here", getLocalBounds(), juce::Justification::centred);
+    }
     /*
     if (isHovering)
     {
@@ -190,6 +203,49 @@ void HackBrownAudioProcessorEditor::resized()
     kickButton.setBounds(importSoundXOffset, 320, buttonWidth, importSoundHeight);
     snareButton.setBounds(importSoundXOffset, 420, buttonWidth, importSoundHeight);
     hatButton.setBounds(importSoundXOffset, 520, buttonWidth, importSoundHeight);
+}
+
+// 1. Tell the OS if you are interested in the files being dragged
+bool HackBrownAudioProcessorEditor::isInterestedInFileDrag (const juce::StringArray& files)
+{
+    if (files.isEmpty())
+        return false;
+
+    // Optional: Only accept audio files
+    juce::File file (files[0]);
+    juce::String ext = file.getFileExtension().toLowerCase();
+    return (ext == ".wav" || ext == ".mp3" || ext == ".aiff" || ext == ".aif" || ext == ".flac");
+}
+
+// 2. This triggers when the user releases the mouse and drops the file
+void HackBrownAudioProcessorEditor::filesDropped (const juce::StringArray& files, int x, int y)
+{
+    isDragging = false;
+    repaint();
+
+    if (files.isEmpty())
+        return;
+
+    // Grab the first file in the array of dropped items
+    juce::File file (files[0]);
+    
+    // Run your existing processing and show the play button
+    audioProcessor.processUploadedLoop(file);
+    addAndMakeVisible(playButton);
+}
+
+// 3. (Optional) Provide visual feedback when the file enters the UI area
+void HackBrownAudioProcessorEditor::fileDragEnter (const juce::StringArray& files, int x, int y)
+{
+    isDragging = true;
+    repaint(); // Forces paint() to run, allowing you to draw a "Drop Here" overlay
+}
+
+// 4. (Optional) Reset visual feedback if the user drags the file away
+void HackBrownAudioProcessorEditor::fileDragExit (const juce::StringArray& files)
+{
+    isDragging = false;
+    repaint();
 }
 
 /*

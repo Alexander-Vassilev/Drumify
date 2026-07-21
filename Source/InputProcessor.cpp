@@ -57,105 +57,86 @@ void InputProcessor::reset()
     onsetDetector.reset();
 }
 
-void InputProcessor::processSample(float sample, float amp)
+void InputProcessor::processSample(float sample, float amp, bool externalTrigger)
 {
     if (storedHitsIndex >= numHits)
         return;
 
     currSample++;
+    int compensatedCurrSample = currSample - totalDelay;
 
     // --- Update pre-roll buffer (always) ---
     preRoll[preRollIndex] = sample;
     preRollIndex = (preRollIndex + 1) % preRollSamples;
 
-    // This keeps the internal 50 and 100 sample moving averages up-to-date.
-    bool isTriggerDetected = onsetDetector.processSample(amp, 0);
-    // --- Envelope novelty (onset emphasis) ---
-    // --- Envelope novelty (Baseline Tracker) ---
-    // The baseline slowly chases the current amplitude
-    //baselineAmp += trackerSpeed * (amp - baselineAmp);
-    
-    // Novelty is how far the current amp has spiked ABOVE the slow baseline
-    //float novelty = std::max(0.0f, amp - baselineAmp);
-
     // ===============================
-    // ONSET LOGIC (simplified trigger)
+    // ONSET TRIGGER LOGIC (Retrospective)
     // ===============================
-    if (!isActivated)
+    if (externalTrigger)
     {
-        // Trigger on FIRST strong transient, not sustained signal
-        if (isTriggerDetected)
-        //if (amp > onsetThreshold && novelty > noveltyThreshold)
+        if (!isActivated)
         {
-            DBG("new hit");
-            DBG("curr sample hit start: " << currSample);
-            // --- Activate hit immediately ---
+            DBG("Sample " << compensatedCurrSample << ": new hit triggered externally");
             isActivated = true;
             currHitIndex = 0;
 
             auto& hit = storedHits[storedHitsIndex];
-            hit.onsetSample = std::max(0, currSample - preRollSamples); // Account for pre-roll
+            hit.onsetSample = std::max(0, compensatedCurrSample);
             hit.buffer.setSize(1, samplesPerHit);
             hit.buffer.clear();
             writePtr = hit.buffer.getWritePointer(0);
 
-            // --- Copy pre-roll ---
-            for (int i = 0; i < preRollSamples; ++i)
+            // --- Copy Retrospective Pre-roll ---
+            // Grabs the past 1756 samples from the circular buffer
+            for (int i = 0; i < totalDelay; ++i)
             {
-                int idx = (preRollIndex + i) % preRollSamples;
+                int delay = totalDelay - i; // Ranges from 1756 down to 1
+                int idx = (preRollIndex - delay + preRollSamples) % preRollSamples;
                 writePtr[currHitIndex] = preRoll[idx];
                 currHitIndex++;
             }
         }
-    }
-    // ===============================
-    // MID-HIT RE-TRIGGER LOGIC
-    // ===============================
-    else
-    {
-        // Enforce a lockout period (e.g. 1024 samples is ~23ms at 44.1kHz).
-        // This allows the initial transient to fully settle before we begin
-        // listening for a second physical hit.
-        constexpr int retriggerLockout = 1024;
-
-        if (currHitIndex > retriggerLockout && isTriggerDetected)
+        else
         {
-            DBG("re-triggered new hit mid-signal (statistical)");
-            DBG("curr sample hit start: " << currSample);
-
-            int hitLength = std::max(0, currHitIndex - preRollSamples);
-            
-            if (hitLength > minHitLength) {
-                // 1. Finalize the current active hit, trimming the pre-roll samples.
-                auto& oldHit = storedHits[storedHitsIndex];
-                oldHit.hitLength = hitLength;
-                storedHitsIndex++;
-            }
-
-            if (storedHitsIndex >= numHits)
+            // --- MID-HIT RE-TRIGGER LOGIC ---
+            // Ensure we don't trim into negative indices during a split
+            if (currHitIndex > totalDelay)
             {
-                isActivated = false;
-            }
-            else
-            {
-                // 2. Initialize the new hit immediately
-                currHitIndex = 0;
-                auto& newHit = storedHits[storedHitsIndex];
-                newHit.onsetSample = std::max(0, currSample - preRollSamples);
-                newHit.buffer.setSize(1, samplesPerHit);
-                newHit.buffer.clear();
-                writePtr = newHit.buffer.getWritePointer(0);
-
-                // 3. Copy the pre-roll samples into the new hit
-                for (int i = 0; i < preRollSamples; ++i)
+                int hitLength = currHitIndex - totalDelay;
+                
+                if (hitLength > minHitLength)
                 {
-                    
-                    int idx = (preRollIndex + i) % preRollSamples;
-                    writePtr[currHitIndex] = preRoll[idx];
-                    currHitIndex++;
+                    DBG("Sample " << compensatedCurrSample << ": re-triggered new hit mid-signal (retrospective)");
+                    auto& oldHit = storedHits[storedHitsIndex];
+                    oldHit.hitLength = hitLength;
+                    storedHitsIndex++;
                 }
 
-                offsetCounter = 0; // Reset offset counter for the brand new hit
+                if (storedHitsIndex >= numHits)
+                {
+                    isActivated = false;
+                }
+                else
+                {
+                    // Start the new hit
+                    currHitIndex = 0;
+                    auto& newHit = storedHits[storedHitsIndex];
+                    newHit.onsetSample = std::max(0, compensatedCurrSample);
+                    newHit.buffer.setSize(1, samplesPerHit);
+                    newHit.buffer.clear();
+                    writePtr = newHit.buffer.getWritePointer(0);
+
+                    // Copy retrospective pre-roll
+                    for (int i = 0; i < totalDelay; ++i)
+                    {
+                        int delay = totalDelay - i;
+                        int idx = (preRollIndex - delay + preRollSamples) % preRollSamples;
+                        writePtr[currHitIndex] = preRoll[idx];
+                        currHitIndex++;
+                    }
+
+                    offsetCounter = 0;
+                }
             }
         }
     }
@@ -163,9 +144,10 @@ void InputProcessor::processSample(float sample, float amp)
     // ===============================
     // RECORDING LOGIC
     // ===============================
-    if (isActivated) {
-        
-        if (currHitIndex < samplesPerHit) {
+    if (isActivated)
+    {
+        if (currHitIndex < samplesPerHit)
+        {
             writePtr[currHitIndex] = sample;
             currHitIndex++;
         }
@@ -173,25 +155,25 @@ void InputProcessor::processSample(float sample, float amp)
         // ===============================
         // OFFSET LOGIC (sustained below threshold)
         // ===============================
-        if (amp < offsetThreshold) {
+        if (amp < offsetThreshold)
+        {
             offsetCounter++;
-            //DBG(offsetCounter);
-            if (offsetCounter >= minOffsetSamples) {
-                DBG("curr sample hit complete: " << currSample);
-                
-                if (currHitIndex > minHitLength) {
-                    // --- Finalize hit ---
+            if (offsetCounter >= minOffsetSamples)
+            {
+                if (currHitIndex > minHitLength)
+                {
+                    DBG("Sample " << compensatedCurrSample << ": curr sample hit complete");
                     auto& hit = storedHits[storedHitsIndex];
                     hit.hitLength = currHitIndex;
-                    //DBG("hit length:");
-                    //DBG(currHitIndex);
 
                     storedHitsIndex++;
                     isActivated = false;
                     offsetCounter = 0;
                 }
             }
-        } else {
+        }
+        else
+        {
             offsetCounter = 0;  // Reset if amplitude goes back up
         }
     }

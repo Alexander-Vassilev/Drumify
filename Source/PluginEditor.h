@@ -86,7 +86,7 @@ private:
 //==============================================================================
 /**
 */
-class HackBrownAudioProcessorEditor  : public juce::AudioProcessorEditor
+class HackBrownAudioProcessorEditor  : public juce::AudioProcessorEditor, public juce::FileDragAndDropTarget
 {
 public:
     HackBrownAudioProcessorEditor (HackBrownAudioProcessor&);
@@ -105,6 +105,11 @@ public:
     void fileDragMove (const juce::StringArray& files, int x, int y) override;
     void fileDragExit (const juce::StringArray& files) override;
 */
+    // 2. Add these FileDragAndDropTarget overrides
+    bool isInterestedInFileDrag (const juce::StringArray& files) override;
+    void filesDropped (const juce::StringArray& files, int x, int y) override;
+    void fileDragEnter (const juce::StringArray& files, int x, int y) override;
+    void fileDragExit (const juce::StringArray& files) override;
 private:
     // This reference is provided as a quick way for your editor to
     // access the processor object that created it.
@@ -127,6 +132,8 @@ private:
     std::unique_ptr<juce::FileChooser> chooser;
     std::unique_ptr<juce::AudioFormatReaderSource> readerSource;
     juce::AudioTransportSource transportSource;
+    
+    bool isDragging = false; // Useful for drawing visual feedback
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HackBrownAudioProcessorEditor)
 };

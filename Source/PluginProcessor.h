@@ -130,7 +130,7 @@ private:
     
     ComplexOdf complexOnsetDetector { fftOrder, currentSampleRate }; // Order 10 = size 1024
     static constexpr float statisticalRatioThreshold = 1.5f; // Adjust this threshold to taste
-    static constexpr float statisticalAbsoluteThreshold = 220.0f; // Adjust this threshold to taste
+    static constexpr float statisticalAbsoluteThreshold = 3000.0f; // Adjust this threshold to taste
     static constexpr int baseMeanLength = 1; // Adjust this threshold to taste
     static constexpr int mediumHistoryMeanLength = 6; // Adjust this threshold to taste
     static constexpr int longHistoryMeanLength = 20; // Adjust this threshold to taste
