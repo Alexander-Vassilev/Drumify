@@ -75,57 +75,105 @@ HitFeatures HitClassifier::extractFeatures(const juce::AudioBuffer<float>& buffe
     return f;
 }
 
-float HitClassifier::getDelta(std::vector<float> centroids)
+float HitClassifier::getDelta(const std::vector<float>& values, const std::vector<float>& volumes)
 {
-    if (centroids.size() > 1)
-    {
-        float sumX  = 0.0f;
-        float sumY  = 0.0f;
-        float sumXY = 0.0f;
-        float sumXX = 0.0f;
-        
-        int numFramesIter = std::min(static_cast<int>(centroids.size()), 6);
-        float M = static_cast<float>(numFramesIter);
-
-        // 2. Loop runs exactly 'numFramesIter' times (starts at 0)
-        for (int i = 0; i < numFramesIter; ++i)
-        {
-            float x = static_cast<float>(i);
-            float y = centroids[i];
-
-            DBG("centroid for delta: " << y);
-            //DBG("index for delta: " << x);
-            
-            sumX  += x;
-            sumY  += y;
-            sumXY += x * y;
-            sumXX += x * x;
-        }
-
-        float denominator = (M * sumXX) - (sumX * sumX);
-        
-        if (std::abs(denominator) > 1e-5f)
-        {
-            // Now the number of points in the loop matches M perfectly,
-            // giving you the mathematically correct slope.
-            return ((M * sumXY) - (sumX * sumY)) / denominator;
-        }
-        else
-        {
-            return 0.0f;
-        }
-    }
-    else
-    {
+    // Ensure vectors are valid and match in size
+    if (values.size() <= 1 || volumes.size() <= 1 || values.size() != volumes.size())
         return 0.0f;
+
+    // 1. Find the peak of the volume (energy)
+    // Limit search to the first few frames (e.g. 9) to avoid tail reflections/noise
+    int searchLimit = std::min(static_cast<int>(volumes.size()), 9);
+    
+    auto maxIt = std::max_element(volumes.begin(), volumes.begin() + searchLimit);
+    int peakIndex = static_cast<int>(std::distance(volumes.begin(), maxIt));
+
+    // 2. Set the bounds for the linear regression
+    int numFramesIter = std::min(static_cast<int>(values.size()), 9);
+    
+    // Guard: Ensure we have at least 2 frames left from the peak to calculate a slope
+    if (peakIndex >= numFramesIter - 1)
+    {
+        peakIndex = std::max(0, numFramesIter - 2);
     }
+
+    float M = static_cast<float>(numFramesIter - peakIndex);
+
+    float sumX  = 0.0f;
+    float sumY  = 0.0f;
+    float sumXY = 0.0f;
+    float sumXX = 0.0f;
+
+    // 3. Loop starts dynamically at the peak frame
+    for (int i = peakIndex; i < numFramesIter; ++i)
+    {
+        float x = static_cast<float>(i - peakIndex);
+        float y = values[i];
+
+        DBG("value for delta: " << y << " at adjusted index x: " << x << " (original index: " << i << ")");
+        
+        sumX  += x;
+        sumY  += y;
+        sumXY += x * y;
+        sumXX += x * x;
+    }
+
+    float denominator = (M * sumXX) - (sumX * sumX);
+    
+    if (std::abs(denominator) > 1e-5f)
+    {
+        float result = ((M * sumXY) - (sumX * sumY)) / denominator;
+        DBG("Dynamic start index: " << peakIndex << " | delta: " << result);
+        return result;
+    }
+    
+    return 0.0f;
+}
+
+double HitClassifier::calculateGaussianPDF(double x, double mean, double stdev)
+{
+    // Avoid division by zero
+    if (stdev <= 0.0)
+        stdev = 1e-5;
+    
+    double exponent = -std::pow(x - mean, 2.0) / (2.0 * std::pow(stdev, 2.0));
+    double coefficient = 1.0 / (stdev * std::sqrt(2.0 * juce::MathConstants<double>::pi));
+    
+    return coefficient * std::exp(exponent);
+}
+
+double HitClassifier::calculateClassLikelihood(const PooledHitFeatures& f, const DrumClassParameters& params)
+{
+    double pCentroid = calculateGaussianPDF(f.meanCentroid,     params.meanCentroid.mean, params.meanCentroid.stdev);
+    double pDelta    = calculateGaussianPDF(f.centroidDelta,    params.delta.mean,        params.delta.stdev);
+    double pTop      = calculateGaussianPDF(f.topEndHeavyRatio, params.topEndHeavy.mean,  params.topEndHeavy.stdev);
+    double pLow      = calculateGaussianPDF(f.lowEndHeavyRatio, params.lowEndHeavy.mean,  params.lowEndHeavy.stdev);
+
+    pCentroid = std::min(1.0, pCentroid);
+    pDelta    = std::min(1.0, pDelta);
+    pTop      = std::min(1.0, pTop);
+    pLow      = std::min(1.0, pLow);
+    
+    DBG (juce::String::formatted (
+        "pCentroid: %-6.2f | pDelta: %-6.2f | pTopEndHeavyRatio: %-6.2f | pLowEndHeavyRatio: %-6.2f",
+        pCentroid, pDelta, pTop, pLow
+    ));
+    
+    double wCentroid = std::pow(pCentroid, params.weights.centroidWeight);
+    double wDelta    = std::pow(pDelta,    params.weights.deltaWeight);
+    double wTop      = std::pow(pTop,      params.weights.topWeight);
+    double wLow      = std::pow(pLow,      params.weights.lowWeight);
+    
+    // Naive Bayes Assumption: Multiply the independent feature probabilities together
+    return wCentroid * wDelta * wTop * wLow;
+    //return pCentroid * pDelta * pTop * pLow;
 }
 
 // Heuristic classification:
 // - Hat: high ZCR + short duration
 // - Kick: low ZCR + longer duration + decent RMS
 // - Snare: mid ZCR band
-HitType HitClassifier::classify(const HitFeatures& f)
+HitType HitClassifier::classify(const HitFeatures& f, std::ofstream& csvFile)
 {
     DBG("fftActive: " << static_cast<int>(f.fftActive));
     if (f.fftActive) {
@@ -134,9 +182,11 @@ HitType HitClassifier::classify(const HitFeatures& f)
         int analysisLen = std::min(numWindows, 28);
         std::vector<float> spectralCentroids;
         std::vector<float> avgLowEnergies;
+        std::vector<float> avgLowMidEnergies;
         std::vector<float> avgMidEnergies;
         std::vector<float> avgHighEnergies;
         std::vector<float> prominences;
+        std::vector<float> totalEnergies;
         std::vector<int> dominantBands;
         
         for (int i = 0; i < analysisLen; i++) {
@@ -150,7 +200,7 @@ HitType HitClassifier::classify(const HitFeatures& f)
             }
             std::cout << std::endl;
             
-            const float silenceThreshold = 5.0f;
+            const float silenceThreshold = 10.0f;
             if (totalEnergy < silenceThreshold) {
                 continue;
             }
@@ -159,14 +209,17 @@ HitType HitClassifier::classify(const HitFeatures& f)
             float centroid = DrumFeatureExtractor::calculateSpectralCentroid(fftFilterbank);
             float prominence = DrumFeatureExtractor::calculateLowMidProminence(f.stftData[i], 44100, FFTProcessor::numBins);
             float lowEnergy = DrumFeatureExtractor::calculateAvgEnergyInBand(fftFilterbank, 0, 3);
+            float lowMidEnergy = DrumFeatureExtractor::calculateAvgEnergyInBand(fftFilterbank, 0, 5);
             float midEnergy = DrumFeatureExtractor::calculateAvgEnergyInBand(fftFilterbank, 5, 12);
             float highEnergy = DrumFeatureExtractor::calculateAvgEnergyInBand(fftFilterbank, 17, 25);
             
             spectralCentroids.push_back(centroid);
             prominences.push_back(prominence);
             avgLowEnergies.push_back(lowEnergy);
+            avgLowMidEnergies.push_back(lowMidEnergy);
             avgMidEnergies.push_back(midEnergy);
             avgHighEnergies.push_back(highEnergy);
+            totalEnergies.push_back(totalEnergy);
         }
         
         analysisLen = spectralCentroids.size();
@@ -184,9 +237,9 @@ HitType HitClassifier::classify(const HitFeatures& f)
         for (int i = 0; i < analysisLen; ++i) {
             centroidSum += spectralCentroids[i];
             prominenceSum += prominences[i];
-            DBG("Low avg nrg: " << avgLowEnergies[i]);
-            DBG("Mid avg nrg: " << avgMidEnergies[i]);
-            DBG("High avg nrg: " << avgHighEnergies[i]);
+            //DBG("Low avg nrg: " << avgLowEnergies[i]);
+            //DBG("Mid avg nrg: " << avgMidEnergies[i]);
+            //DBG("High avg nrg: " << avgHighEnergies[i]);
             
             // Only considering first 8 windows
             if ((avgHighEnergies[i] > avgMidEnergies[i]) && (i < numFramesConsiderTopEndHeavy)) topEndHeavyCount++;
@@ -195,8 +248,8 @@ HitType HitClassifier::classify(const HitFeatures& f)
         
         pooledFeatures.meanCentroid = centroidSum / static_cast<float>(analysisLen);
         pooledFeatures.meanLowMidProminence = prominenceSum / static_cast<float>(analysisLen);
-        pooledFeatures.topEndHeavyCount = topEndHeavyCount;
-        pooledFeatures.lowEndHeavyCount = lowEndHeavyCount;
+        pooledFeatures.topEndHeavyRatio = static_cast<float>(topEndHeavyCount) / static_cast<float>(numFramesConsiderTopEndHeavy);
+        pooledFeatures.lowEndHeavyRatio = static_cast<float>(lowEndHeavyCount) / static_cast<float>(numFramesConsiderLowEndHeavy);
         
         if (!spectralCentroids.empty())
         {
@@ -216,119 +269,67 @@ HitType HitClassifier::classify(const HitFeatures& f)
             pooledFeatures.centroidStdDev = std::sqrt(varianceSum / static_cast<float>(spectralCentroids.size()));
 
             // C. Calculate Delta (Spectral Shift Direction: End - Start)
-            pooledFeatures.centroidDelta = getDelta(spectralCentroids);
+            //pooledFeatures.centroidDelta = getDelta(spectralCentroids);
+            pooledFeatures.centroidDelta = getDelta(avgLowMidEnergies, totalEnergies);
         }
         
         // Print the resulting dynamic footprint
         DBG (juce::String::formatted (
-            "Mean Centroid: %-6.2f | Std Dev: %-6.2f | Delta: %-6.2f | Prominence: %-6.2f | ZCR: %-6.2f | TopEndHeavyCount: %-6d | LowEndHeavyCount: %-6d",
-            pooledFeatures.meanCentroid, pooledFeatures.centroidStdDev, pooledFeatures.centroidDelta, pooledFeatures.meanLowMidProminence, f.zcr, pooledFeatures.topEndHeavyCount, pooledFeatures.lowEndHeavyCount
+            "Mean Centroid: %-6.2f | Delta: %-6.2f | TopEndHeavyCount: %-6.2f | LowEndHeavyCount: %-6.2f",
+            pooledFeatures.meanCentroid, pooledFeatures.centroidDelta, pooledFeatures.topEndHeavyRatio, pooledFeatures.lowEndHeavyRatio
         ));
         
-        const float kickMaxCentroid = 5.0f;   // Kicks must be concentrated in low bands
-        const float kickMaxDelta    = 0.2f;   // Kicks must not shift upwards in pitch
-
-        const float hihatMinCentroid = 12.5f; // Hi-Hats must be concentrated in high bands
-        const float hihatMaxStdDev   = 5.0f;  // Hi-Hats are spectrally stable/constant over time
-
-        const float snareMinCentroid = 7.0f;  // Snares must have some mid-range weight
-        const float snareMaxCentroid = 14.0f; // Snares should not be as bright as cymbals
-        
-        const float snareMinProminence = 2.2f;
-        
-        // ==========================================
-        // DECISION TREE
-        // ==========================================
-
-        // 1. Check for Hi-Hat / Cymbal Family
-        // Bright overall centroid, and spectrally very stable (low standard deviation)
-        if (pooledFeatures.meanCentroid >= hihatMinCentroid && pooledFeatures.centroidStdDev <= hihatMaxStdDev && pooledFeatures.meanLowMidProminence < snareMinProminence)
+        if (csvFile.is_open())
         {
-            DBG("Hat");
+            // Write each column separated by a comma, ending with std::endl to flush to disk
+            csvFile << std::fixed << std::setprecision(4) << ","
+                    << pooledFeatures.meanCentroid << ","
+                    << pooledFeatures.centroidDelta << ","
+                    << pooledFeatures.topEndHeavyRatio << ","
+                    << pooledFeatures.lowEndHeavyRatio << std::endl;
+        }
+        
+        DBG("Hat Probabilities:");
+        DBG("Kick Probabilities:");
+        DBG("Snare Probabilities:");
+        
+        double hatLikelihood   = calculateClassLikelihood(pooledFeatures, hatParams);
+        double kickLikelihood  = calculateClassLikelihood(pooledFeatures, kickParams);
+        double snareLikelihood = calculateClassLikelihood(pooledFeatures, snareParams);
+
+        double totalLikelihood = hatLikelihood + kickLikelihood + snareLikelihood;
+
+        ClassificationResult result;
+
+        // ========================================================
+        // NORMALIZATION (Convert to percentages)
+        // ========================================================
+        if (totalLikelihood > 1e-25) // Prevent division by near-zero underflows
+        {
+            result.hatProbability   = (hatLikelihood / totalLikelihood) * 100.0;
+            result.kickProbability  = (kickLikelihood / totalLikelihood) * 100.0;
+            result.snareProbability = (snareLikelihood / totalLikelihood) * 100.0;
+        }
+        else
+        {
+            // Fallback for extreme outlier signals (assign equal probability)
+            result.hatProbability   = 33.33;
+            result.kickProbability  = 33.33;
+            result.snareProbability = 33.33;
+        }
+        
+        DBG("");
+        DBG("Hat Likelihood: " << result.hatProbability);
+        DBG("Kick Likelihood: " << result.kickProbability);
+        DBG("Snare Likelihood: " << result.snareProbability);
+
+        // Determine the class with the highest probability
+        if (result.hatProbability >= result.kickProbability && result.hatProbability >= result.snareProbability)
             return HitType::Hat;
-        }
-
-        // 2. Check for Kick Drum Family
-        // Dark overall centroid, and doesn't drift upward in pitch
-        if (pooledFeatures.meanCentroid <= kickMaxCentroid && pooledFeatures.centroidDelta <= kickMaxDelta)
-        {
-            DBG("Kick");
+        else if (result.kickProbability >= result.hatProbability && result.kickProbability >= result.snareProbability)
             return HitType::Kick;
-        }
-
-        // 3. Check for Snare Drum Family
-        // Snare sits in the mid-range. Alternatively, if a sound is bright but
-        // has a high Std Dev, it is likely a snare rattle rather than a stable hi-hat.
-        if (pooledFeatures.meanCentroid >= snareMinCentroid && pooledFeatures.meanCentroid <= snareMaxCentroid)
-        {
-            DBG("Snare");
+        else
             return HitType::Snare;
-        }
-        else if (pooledFeatures.meanCentroid > snareMaxCentroid && pooledFeatures.centroidStdDev > hihatMaxStdDev)
-        {
-            DBG("Snare");
-            // Bright, but highly unstable over time (the initial crack decaying into snare rattle)
-            return HitType::Snare;
-        }
-        else if (pooledFeatures.meanLowMidProminence >= snareMinProminence)
-        {
-            DBG("Snare");
-            // Bright, but highly unstable over time (the initial crack decaying into snare rattle)
-            return HitType::Snare;
-        }
-
-        // 4. Fallback if the hit doesn't match standard profiles
-        return HitType::Unknown;
-        /*
-        std::sort(dominantBands.begin(), dominantBands.end());
-        
-        int mostCommonBand = 0;
-        int currBand = dominantBands[0];
-        int mostTimesOccurring = 0;
-        int currTimesOccurring = 0;
-        
-        for (auto band : dominantBands) {
-            if (band == currBand) {
-                currTimesOccurring++;
-            } else {
-                if (currTimesOccurring > mostTimesOccurring) {
-                    mostTimesOccurring = currTimesOccurring;
-                    mostCommonBand = currBand;
-                }
-                
-                currBand = band;
-                currTimesOccurring = 1;
-            }
-        }
-        
-        if (currTimesOccurring > mostTimesOccurring) {
-            mostTimesOccurring = currTimesOccurring;
-            mostCommonBand = currBand;
-        }
-        
-        float mean = std::accumulate(dominantBands.begin(), dominantBands.end(), 0.0) / dominantBands.size();
-        mostCommonBand = mean;
-        float dominanceRatio = static_cast<float>(mostTimesOccurring) / numWindows;
-        dominanceRatio = 1;
-         
-        
-        DBG("Energy density located at filterbank #" << mostCommonBand);
-        DBG("This corresponds to " << bandIndexToHz(mostCommonBand, 44100) << " hz");
-        DBG("DominanceRatio: " << dominanceRatio);
-        
-        if (mostCommonBand > 15 && dominanceRatio > 0.7) {
-            DBG("Hat");
-            return HitType::Hat;
-        } else if (mostCommonBand < 2 && dominanceRatio > 0.8) {
-            DBG("Kick");
-            return HitType::Kick;
-        } else {
-            DBG("Snare");
-            return HitType::Snare;
-        }
-         */
-        
-        
     }
     
     // Hat: bright/noisy and short

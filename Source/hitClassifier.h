@@ -1,5 +1,6 @@
 #pragma once
 #include <JuceHeader.h>
+#include <fstream>
 #include "FFTProcessor.h"
 
 // Forward declare to avoid include cycles if you want
@@ -20,8 +21,8 @@ struct PooledHitFeatures
     float centroidStdDev = 0.0f;
     float centroidDelta = 0.0f;
     float meanLowMidProminence = 0.0f;
-    int topEndHeavyCount = 0;
-    int lowEndHeavyCount = 0;
+    float topEndHeavyRatio = 0.0f;
+    float lowEndHeavyRatio = 0.0f;
 };
 
 struct HitFeatures
@@ -34,6 +35,80 @@ struct HitFeatures
     int windowCount = 0;
     
     std::vector<std::array<float, FFTProcessor::numBins>> stftData{};
+};
+
+// --- 1. Structs for Parametric Distributions ---
+struct FeatureDistribution
+{
+    double mean;
+    double stdev;
+};
+
+struct FeatureWeights
+{
+    double centroidWeight = 1.0;
+    double deltaWeight    = 1.0;
+    double topWeight      = 1.0;
+    double lowWeight      = 1.0;
+};
+
+struct DrumClassParameters
+{
+    FeatureDistribution meanCentroid;
+    FeatureDistribution delta;
+    FeatureDistribution topEndHeavy;
+    FeatureDistribution lowEndHeavy;
+    
+    FeatureWeights weights;
+};
+
+struct ClassificationResult
+{
+    double hatProbability;   // 0.0 to 100.0%
+    double kickProbability;  // 0.0 to 100.0%
+    double snareProbability; // 0.0 to 100.0%
+};
+
+const DrumClassParameters hatParams {
+    { 17.5, 1.66 },    // Mean Centroid
+    { -0.997, 2.98 },  // Delta
+    { 0.970, 0.103 },  // TopEndHeavyRatio
+    { 0.117, 0.223 },  // LowEndHeavyRatio
+    
+    {
+        1,  // centroidWeight
+        1,  // deltaWeight
+        2.0,  // topWeight
+        1.0   // lowWeight
+    }
+};
+
+const DrumClassParameters kickParams {
+    { 3.75, 2.74 },
+    { -9.67, 8.21 },
+    { 0.200, 0.286 },
+    { 0.967, 0.0579 },
+    
+    {
+        0.9,  // centroidWeight
+        1,  // deltaWeight
+        0.8,  // topWeight
+        1.0   // lowWeight
+    }
+};
+
+const DrumClassParameters snareParams {
+    { 12.8, 2.05 },
+    { -7.83, 11.52 },
+    { 0.545, 0.392 },
+    { 0.494, 0.337 },
+    
+    {
+        1,  // centroidWeight
+        2.5,  // deltaWeight
+        2.0,  // topWeight
+        2.0   // lowWeight
+    }
 };
 
 class DrumFeatureExtractor
@@ -118,12 +193,14 @@ class HitClassifier
 public:
     HitFeatures extractFeatures(const juce::AudioBuffer<float>& buffer, int length, double sampleRate);
     static std::vector<std::vector<juce::dsp::Complex<float>>> getSTFT(const juce::AudioBuffer<float>& buffer, int length);
-    static HitType classify(const HitFeatures& f);
+    static HitType classify(const HitFeatures& f, std::ofstream& csvFile);
     static const char* toString(HitType t);
     
     FFTProcessor fft;
 private:
     static float computeRMS(const juce::AudioBuffer<float>& buffer, int length);
     static float computeZeroCrossingRate(const juce::AudioBuffer<float>& buffer, int length);
-    static float getDelta(std::vector<float> centroids);
+    static float getDelta(const std::vector<float>& values, const std::vector<float>& volumes);
+    static double calculateGaussianPDF(double x, double mean, double stdev);
+    static double calculateClassLikelihood(const PooledHitFeatures& f, const DrumClassParameters& params);
 };

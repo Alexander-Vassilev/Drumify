@@ -79,9 +79,29 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
     loopReplaceButton.onClick = [&]() {
         fileOpener([this] (const juce::File& file)
         {
+            std::cout << "starting the\n";
             audioProcessor.processUploadedLoop(file);
-            juce::File testFile ("/Users/lightspark/Documents/JuceProjects/HackBrown2026/Data/Snares/Acoustic Snares/KSHMR Acoustic Snare 01 (A#).wav");
-            //audioProcessor.processUploadedLoop(testFile);
+            if (false) {
+                juce::File snaresDir ("/Users/lightspark/Documents/JuceProjects/HackBrown2026/Data/Hats");
+
+                // Defensive check: Ensure the folder actually exists on your disk
+                if (snaresDir.isDirectory())
+                {
+                    for (const auto& entry : juce::RangedDirectoryIterator (snaresDir, true, "*.wav", juce::File::findFiles))
+                    {
+                        juce::File newFile = entry.getFile();
+                        
+                        // Process each file one by one
+                        audioProcessor.processUploadedLoop (newFile);
+                    }
+                    
+                    DBG ("Finished processing all files in the directory.");
+                }
+                else
+                {
+                    DBG ("Error: The directory '/Data/Snares' was not found!");
+                }
+            }
         });
         
         addAndMakeVisible(playButton);

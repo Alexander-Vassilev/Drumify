@@ -320,7 +320,6 @@ public:
         if (count < size) {
             count++;
         }
-        DBG("count: " << count);
 
         // Returns current mean
         return getMean();
@@ -409,7 +408,7 @@ public:
         float currentVariance = mediumHistoryMeanSMA.getVariance();
         float varianceTwoSamplesAgo = prevVariance2;
         
-        if (true)
+        if (false)
         DBG (juce::String::formatted (
             "sample #: %-8d | short-term avg: %-12.4f | long-term avg: %-12.4f | VERY long-term avg: %-12.4f | Variance: %-10.4f",
             sampleCount, currentSMA, mediumHistoryMean, longHistoryMean, mediumHistoryMeanSMA.getVariance()
@@ -480,6 +479,25 @@ private:
 
 class InputProcessor {
 public:
+    InputProcessor() {
+        // 1. Target the Downloads folder
+        auto downloadsDir = juce::File::getSpecialLocation(juce::File::userHomeDirectory)
+                            .getChildFile("Downloads");
+        juce::File file ("/Users/lightspark/Documents/JuceProjects/HackBrown2026/Data/hatstats.csv");
+        //auto file = downloadsDir.getChildFile("drum_features.csv");
+
+        // 2. Check if the file is new before opening it
+        const bool isNewFile = !file.exists();
+
+        // 3. Open in Output + Append mode
+        csvFile.open(file.getFullPathName().toStdString(), std::ios::out | std::ios::app);
+
+        // 4. Write the header row ONLY if the file was just created
+        if (isNewFile && csvFile.is_open())
+        {
+            csvFile << "FileName,MeanCentroid,Delta,TopEndHeavyCount,LowEndHeavyCount" << std::endl;
+        }
+    };
     void activate();
     void deactivate();
     void addSample(float sample);
@@ -495,6 +513,7 @@ public:
     int storedHitsIndex = 0;
     void classifyStoredHits(double sampleRate);
     static constexpr int numHits = 64;
+    juce::String currFileName;
     std::array<MouthHit, numHits> storedHits;
     // Results live here:
     std::vector<ClassifiedHit> classifiedHits;
@@ -561,4 +580,5 @@ private:
     StatisticalOnsetDetector onsetDetector { statisticalRatioThreshold, statisticalAbsoluteThreshold, baseMeanLength, historyMeanLength };
     
     ComplexOdf complexOnsetDetector{10, 44100};
+    std::ofstream csvFile;
 };

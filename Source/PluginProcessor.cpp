@@ -99,9 +99,14 @@ void HackBrownAudioProcessor::reset()
 {
     // ... other resets ...
     isFifoFilled = true;
+    currSampleInFile = 0;
     samplesAccumulated = 0;
     fifoIndex = 0;
     std::fill(std::begin(fifoBuffer), std::end(fifoBuffer), 0.0f);
+    
+    envelopeFollower.reset();
+    inputProcessor.reset();
+    statisticalDetector.reset();
 }
 
 void HackBrownAudioProcessor::getLongestSampleLengthInSamples()
@@ -180,9 +185,8 @@ std::unique_ptr<juce::AudioFormatReader> HackBrownAudioProcessor::createReaderFo
 void HackBrownAudioProcessor::analyzeLoadedDrumLoop (const juce::AudioBuffer<float>& loopBuffer)
 {
     // 1. Reset your DSP components so old history is erased
-    envelopeFollower.reset();
-    inputProcessor.reset();
-
+    reset();
+    
     const int totalSamples = loopBuffer.getNumSamples();
     const int chunkSize = getBlockSize();
     
@@ -203,6 +207,7 @@ void HackBrownAudioProcessor::analyzeLoadedDrumLoop (const juce::AudioBuffer<flo
 void HackBrownAudioProcessor::processUploadedLoop(const juce::File& file)
 {
     auto reader = createReaderForFile (file);
+    inputProcessor.currFileName = file.getFileName();
     
     if (reader == nullptr)
     {
@@ -360,14 +365,14 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
     out.clear();
 
     juce::SynthesiserSound::Ptr kick = drumSynth.getSound(0);
-    DBG("a");
+    //DBG("a");
     auto* samplerSound = dynamic_cast<juce::SamplerSound*>(kick.get());
-    DBG("b");
+    //DBG("b");
     juce::AudioBuffer<float>* kickData = samplerSound->getAudioData();
-    DBG("c");
+    //DBG("c");
     int kickLen = kickData->getNumSamples();
 
-    DBG("built ma kick with a length of: " << kickLen);
+    //DBG("built ma kick with a length of: " << kickLen);
     
     
 
@@ -376,7 +381,7 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
     juce::AudioBuffer<float>* snareData = samplerSound->getAudioData();
     int snareLen = snareData->getNumSamples();
 
-    DBG("built ma snare");
+    //DBG("built ma snare");
 
     juce::SynthesiserSound::Ptr hat = drumSynth.getSound(2);
     samplerSound = dynamic_cast<juce::SamplerSound*>(hat.get());
@@ -389,7 +394,7 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
     }
     
     for (int i = 0; i < events.size(); i++) {
-        DBG("num events" << events.size());
+        //DBG("num events" << events.size());
         juce::AudioBuffer<float> copier;
         bool skipFilter = true;
 
@@ -417,17 +422,17 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
                 bellFilter.process(context);
             }
         }
-        DBG("attempting copy");
-        DBG("start sample: " << events[i].sampleIndex * playbackSpeed - offset);
+        //DBG("attempting copy");
+        //DBG("start sample: " << events[i].sampleIndex * playbackSpeed - offset);
         out.copyFrom(0, events[i].sampleIndex * playbackSpeed - offset, copier, 0, 0, copier.getNumSamples());
-        DBG("applying gain ramp");
+        //DBG("applying gain ramp");
         out.applyGainRamp(0, events[i].sampleIndex * playbackSpeed - offset, copier.getNumSamples(), events[i].velocity01, events[i].velocity01);
-        DBG("copied");
+        //DBG("copied");
     }
 
     //out.copyFrom(0, processLen, *audioData, 0, 0, processLen);
     //out.clear(0, 2 * processLen, outputNumSamples - 2 * processLen);
-    DBG("finished building buffer");
+    //DBG("finished building buffer");
 
     return out;
 }
@@ -462,7 +467,7 @@ void HackBrownAudioProcessor::classifyAudioBlock (int channel, const float* inpu
             onsetConfirmedThisSample = statisticalDetector.processSample(odfValue, currSampleInFile);
             
             logFile << odfValue << std::endl;
-            DBG("odf: " << odfValue);
+            //DBG("odf: " << odfValue);
             
             if (onsetConfirmedThisSample) {
                 int compensatedOnset = currSampleInFile - 1500;
@@ -584,13 +589,13 @@ void HackBrownAudioProcessor::reconstructLoopFromHits() {
     // algorithm classifies/do classification
     isPlaybackOn.store(false);
     inputProcessor.classifyStoredHits(getSampleRate());
-    DBG("classified");
+    //DBG("classified");
     //DBG(inputProcessor.classifiedHits[0].durationSec);
     //DBG(inputProcessor.classifiedHits[0].rms);
     buildDrumBuffer();
-    DBG("2");
+    //DBG("2");
     inputProcessor.hitsToBuffer();
-    DBG("3");
+    //DBG("3");
     
     DBG("---- Editor sees classified hits ----");
     for (const auto& ch : inputProcessor.classifiedHits) //hits are stored in inputProcessor.classifiedhits

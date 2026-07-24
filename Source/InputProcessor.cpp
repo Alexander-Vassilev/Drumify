@@ -63,7 +63,7 @@ void InputProcessor::processSample(float sample, float amp, bool externalTrigger
         return;
 
     currSample++;
-    int compensatedCurrSample = currSample - totalDelay;
+    int compensatedCurrSample = std::max(0, currSample - totalDelay);
 
     // --- Update pre-roll buffer (always) ---
     preRoll[preRollIndex] = sample;
@@ -81,7 +81,7 @@ void InputProcessor::processSample(float sample, float amp, bool externalTrigger
             currHitIndex = 0;
 
             auto& hit = storedHits[storedHitsIndex];
-            hit.onsetSample = std::max(0, compensatedCurrSample);
+            hit.onsetSample = compensatedCurrSample;
             hit.buffer.setSize(1, samplesPerHit);
             hit.buffer.clear();
             writePtr = hit.buffer.getWritePointer(0);
@@ -121,7 +121,7 @@ void InputProcessor::processSample(float sample, float amp, bool externalTrigger
                     // Start the new hit
                     currHitIndex = 0;
                     auto& newHit = storedHits[storedHitsIndex];
-                    newHit.onsetSample = std::max(0, compensatedCurrSample);
+                    newHit.onsetSample = compensatedCurrSample;
                     newHit.buffer.setSize(1, samplesPerHit);
                     newHit.buffer.clear();
                     writePtr = newHit.buffer.getWritePointer(0);
@@ -226,7 +226,7 @@ juce::AudioBuffer<float> InputProcessor::hitsToBuffer() {
             currIndex++;
         }
     }
-    DBG("Hits conveted to bufer");
+    //DBG("Hits conveted to bufer");
     
     return retBuffer;
 };
@@ -292,7 +292,8 @@ void InputProcessor::classifyStoredHits(double sampleRate)
         ClassifiedHit classified;
         classified.hitIndex = i;
         classified.onsetSample = hit.onsetSample;
-        classified.type = HitClassifier::classify(features);
+        if (csvFile.is_open()) csvFile << currFileName;
+        classified.type = HitClassifier::classify(features, csvFile);
         classified.rms = features.rms;
         classified.zcr = features.zcr;
         classified.durationSec = features.durationSec;
