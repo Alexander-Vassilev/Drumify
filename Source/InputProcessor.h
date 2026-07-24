@@ -279,7 +279,7 @@ public:
         runningSquareSum = 0.0; // Reset squares
         writeIndex = 0;
         sampleCounter = 0;
-        count = 0;
+        count = size;
     }
 
     // Call this for every sample. Returns the current average (mean).
@@ -320,6 +320,7 @@ public:
         if (count < size) {
             count++;
         }
+        DBG("count: " << count);
 
         // Returns current mean
         return getMean();
@@ -408,7 +409,6 @@ public:
         float currentVariance = mediumHistoryMeanSMA.getVariance();
         float varianceTwoSamplesAgo = prevVariance2;
         
-        //DBG("long-term avg: " << historyMean << " short-term avg: " << currentSMA << " ODF: " << amp << " sample #" << sampleCount);
         if (true)
         DBG (juce::String::formatted (
             "sample #: %-8d | short-term avg: %-12.4f | long-term avg: %-12.4f | VERY long-term avg: %-12.4f | Variance: %-10.4f",

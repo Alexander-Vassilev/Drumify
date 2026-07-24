@@ -80,6 +80,8 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
         fileOpener([this] (const juce::File& file)
         {
             audioProcessor.processUploadedLoop(file);
+            juce::File testFile ("/Users/lightspark/Documents/JuceProjects/HackBrown2026/Data/Snares/Acoustic Snares/KSHMR Acoustic Snare 01 (A#).wav");
+            //audioProcessor.processUploadedLoop(testFile);
         });
         
         addAndMakeVisible(playButton);

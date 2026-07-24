@@ -12,6 +12,7 @@ build/
 Builds/
 cmake-build-*/
 out/
+Data/
 
 ############################
 # Visual Studio

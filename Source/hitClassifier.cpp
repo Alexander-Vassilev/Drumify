@@ -75,6 +75,52 @@ HitFeatures HitClassifier::extractFeatures(const juce::AudioBuffer<float>& buffe
     return f;
 }
 
+float HitClassifier::getDelta(std::vector<float> centroids)
+{
+    if (centroids.size() > 1)
+    {
+        float sumX  = 0.0f;
+        float sumY  = 0.0f;
+        float sumXY = 0.0f;
+        float sumXX = 0.0f;
+        
+        int numFramesIter = std::min(static_cast<int>(centroids.size()), 6);
+        float M = static_cast<float>(numFramesIter);
+
+        // 2. Loop runs exactly 'numFramesIter' times (starts at 0)
+        for (int i = 0; i < numFramesIter; ++i)
+        {
+            float x = static_cast<float>(i);
+            float y = centroids[i];
+
+            DBG("centroid for delta: " << y);
+            //DBG("index for delta: " << x);
+            
+            sumX  += x;
+            sumY  += y;
+            sumXY += x * y;
+            sumXX += x * x;
+        }
+
+        float denominator = (M * sumXX) - (sumX * sumX);
+        
+        if (std::abs(denominator) > 1e-5f)
+        {
+            // Now the number of points in the loop matches M perfectly,
+            // giving you the mathematically correct slope.
+            return ((M * sumXY) - (sumX * sumY)) / denominator;
+        }
+        else
+        {
+            return 0.0f;
+        }
+    }
+    else
+    {
+        return 0.0f;
+    }
+}
+
 // Heuristic classification:
 // - Hat: high ZCR + short duration
 // - Kick: low ZCR + longer duration + decent RMS
@@ -85,40 +131,72 @@ HitType HitClassifier::classify(const HitFeatures& f)
     if (f.fftActive) {
         const int movAvgSize = 3;
         const int numWindows = f.stftData.size();
-        const int analysisLen = std::min(numWindows, 10);
+        int analysisLen = std::min(numWindows, 28);
         std::vector<float> spectralCentroids;
+        std::vector<float> avgLowEnergies;
+        std::vector<float> avgMidEnergies;
+        std::vector<float> avgHighEnergies;
         std::vector<float> prominences;
         std::vector<int> dominantBands;
         
         for (int i = 0; i < analysisLen; i++) {
             std::array<float, numFilters> fftFilterbank = applyMelFilterbank(f.stftData[i], 44100);
-                
+            
+            float totalEnergy = 0.0f;
+            
             for (int j = 0; j < numFilters; j++) {
                 std::cout << std::fixed << std::setprecision(1) << std::setw(5) << fftFilterbank[j] << " ";
+                totalEnergy += fftFilterbank[j];
             }
             std::cout << std::endl;
+            
+            const float silenceThreshold = 5.0f;
+            if (totalEnergy < silenceThreshold) {
+                continue;
+            }
             
             // 2. Extract features cleanly using the helper class
             float centroid = DrumFeatureExtractor::calculateSpectralCentroid(fftFilterbank);
             float prominence = DrumFeatureExtractor::calculateLowMidProminence(f.stftData[i], 44100, FFTProcessor::numBins);
+            float lowEnergy = DrumFeatureExtractor::calculateAvgEnergyInBand(fftFilterbank, 0, 3);
+            float midEnergy = DrumFeatureExtractor::calculateAvgEnergyInBand(fftFilterbank, 5, 12);
+            float highEnergy = DrumFeatureExtractor::calculateAvgEnergyInBand(fftFilterbank, 17, 25);
             
             spectralCentroids.push_back(centroid);
             prominences.push_back(prominence);
+            avgLowEnergies.push_back(lowEnergy);
+            avgMidEnergies.push_back(midEnergy);
+            avgHighEnergies.push_back(highEnergy);
         }
+        
+        analysisLen = spectralCentroids.size();
         
         PooledHitFeatures pooledFeatures;
         
         // 3. Pool values over time
         float centroidSum = 0.0f;
         float prominenceSum = 0.0f;
+        int topEndHeavyCount = 0;
+        int lowEndHeavyCount = 0;
+        const int numFramesConsiderTopEndHeavy = std::min(9, analysisLen);
+        const int numFramesConsiderLowEndHeavy = std::min(30, analysisLen);
         
         for (int i = 0; i < analysisLen; ++i) {
             centroidSum += spectralCentroids[i];
             prominenceSum += prominences[i];
+            DBG("Low avg nrg: " << avgLowEnergies[i]);
+            DBG("Mid avg nrg: " << avgMidEnergies[i]);
+            DBG("High avg nrg: " << avgHighEnergies[i]);
+            
+            // Only considering first 8 windows
+            if ((avgHighEnergies[i] > avgMidEnergies[i]) && (i < numFramesConsiderTopEndHeavy)) topEndHeavyCount++;
+            if ((avgLowEnergies[i] > avgMidEnergies[i]) && (i < numFramesConsiderLowEndHeavy)) lowEndHeavyCount++;
         }
         
         pooledFeatures.meanCentroid = centroidSum / static_cast<float>(analysisLen);
         pooledFeatures.meanLowMidProminence = prominenceSum / static_cast<float>(analysisLen);
+        pooledFeatures.topEndHeavyCount = topEndHeavyCount;
+        pooledFeatures.lowEndHeavyCount = lowEndHeavyCount;
         
         if (!spectralCentroids.empty())
         {
@@ -138,15 +216,13 @@ HitType HitClassifier::classify(const HitFeatures& f)
             pooledFeatures.centroidStdDev = std::sqrt(varianceSum / static_cast<float>(spectralCentroids.size()));
 
             // C. Calculate Delta (Spectral Shift Direction: End - Start)
-            if (spectralCentroids.size() > 1) {
-                pooledFeatures.centroidDelta = spectralCentroids.back() - spectralCentroids.front();
-            }
+            pooledFeatures.centroidDelta = getDelta(spectralCentroids);
         }
         
         // Print the resulting dynamic footprint
         DBG (juce::String::formatted (
-            "Mean Centroid: %-6.2f | Std Dev: %-6.2f | Delta: %-6.2f | Prominence: %-6.2f | ZCR: %-6.2f",
-            pooledFeatures.meanCentroid, pooledFeatures.centroidStdDev, pooledFeatures.centroidDelta, pooledFeatures.meanLowMidProminence, f.zcr
+            "Mean Centroid: %-6.2f | Std Dev: %-6.2f | Delta: %-6.2f | Prominence: %-6.2f | ZCR: %-6.2f | TopEndHeavyCount: %-6d | LowEndHeavyCount: %-6d",
+            pooledFeatures.meanCentroid, pooledFeatures.centroidStdDev, pooledFeatures.centroidDelta, pooledFeatures.meanLowMidProminence, f.zcr, pooledFeatures.topEndHeavyCount, pooledFeatures.lowEndHeavyCount
         ));
         
         const float kickMaxCentroid = 5.0f;   // Kicks must be concentrated in low bands
@@ -155,7 +231,7 @@ HitType HitClassifier::classify(const HitFeatures& f)
         const float hihatMinCentroid = 12.5f; // Hi-Hats must be concentrated in high bands
         const float hihatMaxStdDev   = 5.0f;  // Hi-Hats are spectrally stable/constant over time
 
-        const float snareMinCentroid = 4.0f;  // Snares must have some mid-range weight
+        const float snareMinCentroid = 7.0f;  // Snares must have some mid-range weight
         const float snareMaxCentroid = 14.0f; // Snares should not be as bright as cymbals
         
         const float snareMinProminence = 2.2f;

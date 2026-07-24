@@ -20,6 +20,8 @@ struct PooledHitFeatures
     float centroidStdDev = 0.0f;
     float centroidDelta = 0.0f;
     float meanLowMidProminence = 0.0f;
+    int topEndHeavyCount = 0;
+    int lowEndHeavyCount = 0;
 };
 
 struct HitFeatures
@@ -85,6 +87,30 @@ public:
         
         return (totalSum > 1e-5f) ? (weightedSum / totalSum) : 0.0f;
     }
+    
+    template <size_t numFilters>
+    static float calculateAvgEnergyInBand(const std::array<float, numFilters>& filterbank, int lowBand, int highBand)
+    {
+        // 1. Clamp both inputs strictly within the valid range [0, numFilters - 1]
+        const int maxValidIndex = static_cast<int>(numFilters) - 1;
+        int start = std::clamp(lowBand, 0, maxValidIndex);
+        int end   = std::clamp(highBand, 0, maxValidIndex);
+        
+        // 2. If the user passed them backwards (e.g., low = 15, high = 5), swap them
+        if (start > end) {
+            std::swap(start, end);
+        }
+        
+        float totalSum = 0.0f;
+        int totalBins = (end - start) + 1; // No abs() needed now because start <= end is guaranteed
+        
+        for (int j = start; j <= end; ++j)
+        {
+            totalSum += filterbank[j];
+        }
+        
+        return (totalSum > 1e-5f) ? (totalSum / static_cast<float>(totalBins)) : 0.0f;
+    }
 };
 
 class HitClassifier
@@ -99,4 +125,5 @@ public:
 private:
     static float computeRMS(const juce::AudioBuffer<float>& buffer, int length);
     static float computeZeroCrossingRate(const juce::AudioBuffer<float>& buffer, int length);
+    static float getDelta(std::vector<float> centroids);
 };

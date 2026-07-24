@@ -462,6 +462,7 @@ void HackBrownAudioProcessor::classifyAudioBlock (int channel, const float* inpu
             onsetConfirmedThisSample = statisticalDetector.processSample(odfValue, currSampleInFile);
             
             logFile << odfValue << std::endl;
+            DBG("odf: " << odfValue);
             
             if (onsetConfirmedThisSample) {
                 int compensatedOnset = currSampleInFile - 1500;
