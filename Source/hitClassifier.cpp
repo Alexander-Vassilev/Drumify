@@ -77,37 +77,33 @@ HitFeatures HitClassifier::extractFeatures(const juce::AudioBuffer<float>& buffe
 
 float HitClassifier::getDelta(const std::vector<float>& values, const std::vector<float>& volumes)
 {
-    // Ensure vectors are valid and match in size
-    if (values.size() <= 1 || volumes.size() <= 1 || values.size() != volumes.size())
+    // 1. Guard: Ensure vectors are valid, match in size, and have at least 6 frames
+    const int numFrames = static_cast<int>(values.size());
+    if (numFrames < 6 || volumes.size() != values.size())
         return 0.0f;
 
-    // 1. Find the peak of the volume (energy)
-    // Limit search to the first few frames (e.g. 9) to avoid tail reflections/noise
-    int searchLimit = std::min(static_cast<int>(volumes.size()), 9);
-    
+    // 2. Find the peak of the volume (energy) in the first 9 frames
+    int searchLimit = std::min(numFrames, 9);
     auto maxIt = std::max_element(volumes.begin(), volumes.begin() + searchLimit);
     int peakIndex = static_cast<int>(std::distance(volumes.begin(), maxIt));
 
-    // 2. Set the bounds for the linear regression
-    int numFramesIter = std::min(static_cast<int>(values.size()), 9);
-    
-    // Guard: Ensure we have at least 2 frames left from the peak to calculate a slope
-    if (peakIndex >= numFramesIter - 1)
-    {
-        peakIndex = std::max(0, numFramesIter - 2);
-    }
+    // 3. Clamp peakIndex so we can always fit exactly 6 frames [C++17 std::clamp]
+    // The maximum possible starting index is (numFrames - 6)
+    peakIndex = std::clamp(peakIndex, 0, numFrames - 6);
 
-    float M = static_cast<float>(numFramesIter - peakIndex);
+    // Constant parameters for exactly 6 iterations
+    const float M = 6.0f;
+    const int loopEnd = peakIndex + 6;
 
     float sumX  = 0.0f;
     float sumY  = 0.0f;
     float sumXY = 0.0f;
     float sumXX = 0.0f;
 
-    // 3. Loop starts dynamically at the peak frame
-    for (int i = peakIndex; i < numFramesIter; ++i)
+    // 4. Loop runs exactly 6 times starting at peakIndex
+    for (int i = peakIndex; i < loopEnd; ++i)
     {
-        float x = static_cast<float>(i - peakIndex);
+        float x = static_cast<float>(i - peakIndex); // x goes from 0.0 to 5.0
         float y = values[i];
 
         DBG("value for delta: " << y << " at adjusted index x: " << x << " (original index: " << i << ")");
@@ -118,12 +114,17 @@ float HitClassifier::getDelta(const std::vector<float>& values, const std::vecto
         sumXX += x * x;
     }
 
+    // --- Mathematical DSP Insight ---
+    // Because M is fixed at 6, and x is always [0, 1, 2, 3, 4, 5]:
+    // - sumX is always 15.0f
+    // - sumXX is always 55.0f
+    // - denominator is always: (6 * 55) - (15 * 15) = 330 - 225 = 105.0f
     float denominator = (M * sumXX) - (sumX * sumX);
     
     if (std::abs(denominator) > 1e-5f)
     {
         float result = ((M * sumXY) - (sumX * sumY)) / denominator;
-        DBG("Dynamic start index: " << peakIndex << " | delta: " << result);
+        DBG("Dynamic start index: " << peakIndex << " | 6-frame delta: " << result);
         return result;
     }
     

@@ -316,7 +316,7 @@ void HackBrownAudioProcessorEditor::filesDropped (const juce::StringArray& files
 
 void HackBrownAudioProcessorEditor::fileOpener (std::function<void (const juce::File&)> fileAction)
 {
-    chooser = std::make_unique<juce::FileChooser> ("Select a Wav or mp3 file to use...", juce::File {}, "*.wav");
+    chooser = std::make_unique<juce::FileChooser> ("Select a Wav or mp3 file to use...", juce::File {}, "*.wav;*.mp3;*.aif;*.aiff;*.flac");
     auto chooserFlags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
     
     // Capture the callback function by value

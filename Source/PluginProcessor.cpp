@@ -214,25 +214,52 @@ void HackBrownAudioProcessor::processUploadedLoop(const juce::File& file)
         DBG ("Could not create reader for file: " + file.getFileName());
         return;
     }
+    
+    const double sourceSampleRate = reader->sampleRate;
+    const double targetSampleRate = 44100.0;
+    
+    const double ratio = sourceSampleRate / targetSampleRate;
+    const int targetLength = static_cast<int> (std::ceil (static_cast<double> (reader->lengthInSamples) / ratio));
 
-    // 2. Determine the size and properties of the audio file
-    const int numChannels = reader->numChannels;
-    const int totalSamples = static_cast<int> (reader->lengthInSamples);
+    // 2. Load the original file data into a temporary buffer
+    juce::AudioBuffer<float> originalBuffer (static_cast<int> (reader->numChannels),
+                                             static_cast<int> (reader->lengthInSamples));
+    
+    reader->read (&originalBuffer,
+                  0,                                // dest start sample
+                  static_cast<int> (reader->lengthInSamples),
+                  0,                                // source start sample
+                  true,                             // fill left
+                  true);                            // fill right
 
-    // 3. Create a temporary buffer large enough to hold the entire file
-    juce::AudioBuffer<float> loopBuffer (numChannels, totalSamples);
-
-    // 4. Read the audio data from the file into our buffer
-    // Arguments: (destBuffer, destStartSample, numSamples, readerStartSample, useLeftChan, useRightChan)
-    reader->read (&loopBuffer,          // Destination JUCE buffer
-                  0,                    // Start sample in destination buffer
-                  totalSamples,         // Number of samples to read
-                  0,                    // Start sample position in the file
-                  true,                 // Read left channel (or mono)
-                  numChannels > 1);     // Read right channel if it exists
+    // 3. Prepare the final buffer at exactly 44.1 kHz
+    juce::AudioBuffer<float> normalizedBuffer (static_cast<int> (reader->numChannels), targetLength);
+    
+    // If the file is already 44.1 kHz, we can skip resampling and copy directly
+    if (std::abs (sourceSampleRate - targetSampleRate) < 0.01)
+    {
+        normalizedBuffer.makeCopyOf (originalBuffer);
+    }
+    else
+    {
+        DBG ("Resampling file from " << sourceSampleRate << " Hz to 44100 Hz...");
+        
+        juce::LagrangeInterpolator resampler;
+        
+        for (int channel = 0; channel < originalBuffer.getNumChannels(); ++channel)
+        {
+            resampler.reset();
+            
+            // Resample the channel into our normalized buffer
+            resampler.process (ratio,
+                               originalBuffer.getReadPointer (channel),
+                               normalizedBuffer.getWritePointer (channel),
+                               targetLength);
+        }
+    }
 
     // 5. Pass the newly populated buffer to your analysis function
-    analyzeLoadedDrumLoop (loopBuffer);
+    analyzeLoadedDrumLoop (normalizedBuffer);
 }
 
 void HackBrownAudioProcessor::loadSampleFromFile(const juce::File& file, int midiNote)
