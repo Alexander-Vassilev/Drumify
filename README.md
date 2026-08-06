@@ -16,11 +16,6 @@ This project implements a hybrid approach, combining **classical digital signal 
 
 ---
 
-### Why this phrasing works well:
-* **Clear Ownership:** Using words like *"completely overhauled the architectural design, rewritten the core DSP pipelines, and engineered the statistical classification engine"* makes it explicitly clear to recruiters or interviewers that every advanced technical detail we discussed (the Complex ODF, Naive Bayes math, circular pre-roll buffers, etc.) was written entirely by you.
-* **Professional and Respectful:** By crediting your friends for the *"initial concept and early foundations,"* you show excellent teamwork and professional integrity. You aren't claiming they did nothing; you are simply clarifying that the *engineering* of the current software is yours.
----
-
 ## Key Features
 
 ### 1. Real-Time safe Onset Detection
