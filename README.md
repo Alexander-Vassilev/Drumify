@@ -39,11 +39,6 @@ To capture the dynamic, time-varying nature of drum hits, the system analyzes th
 * Evaluates the multi-dimensional Gaussian probability density function (PDF) for each class and normalizes the results into intuitive confidence percentages.
 * Employs power-weighting ($p^w$) to allow different features to hold more or less statistical influence depending on the drum type being evaluated.
 
-### 5. Automated Batch Processing
-* **Sample Rate Normalization:** Automatically resamples incoming files from arbitrary sample rates (e.g., 48kHz, 96kHz) to exactly $44.1\text{ kHz}$ using Lagrange interpolation to guarantee DSP algorithm consistency.
-* **Directory Iteration:** Iterates recursively through target directories to batch-process folders of drum hits.
-* **CSV Logging:** Serializes extracted feature sets directly to a `.csv` file in your Downloads folder for easy analysis in Google Sheets or Excel.
-
 ---
 
 ## File Architecture
@@ -103,5 +98,5 @@ This project is configured as a JUCE application and is generated using the **Pr
                     │
          [Gaussian Naive Bayes] (Probability Calculation & Normalization)
                     │
-         [CSV Log / Output] (Writen to Downloads directory)
+         [Playback] (Can be heard by user)
 ```
