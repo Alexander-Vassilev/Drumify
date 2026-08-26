@@ -497,7 +497,7 @@ void HackBrownAudioProcessor::classifyAudioBlock (int channel, const float* inpu
             //DBG("odf: " << odfValue);
             
             if (onsetConfirmedThisSample) {
-                int compensatedOnset = currSampleInFile - 1500;
+                int compensatedOnset = currSampleInFile;
                 DBG("Onset detected at sample index: " << compensatedOnset);
             }
             

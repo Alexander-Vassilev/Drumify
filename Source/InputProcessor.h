@@ -483,7 +483,7 @@ public:
         // 1. Target the Downloads folder
         auto downloadsDir = juce::File::getSpecialLocation(juce::File::userHomeDirectory)
                             .getChildFile("Downloads");
-        juce::File file ("/Users/lightspark/Documents/JuceProjects/HackBrown2026/Data/hatstats.csv");
+        juce::File file ("/Users/lightspark/Documents/JuceProjects/HackBrown2026/Data/snarestats.csv");
         //auto file = downloadsDir.getChildFile("drum_features.csv");
 
         // 2. Check if the file is new before opening it
@@ -495,7 +495,7 @@ public:
         // 4. Write the header row ONLY if the file was just created
         if (isNewFile && csvFile.is_open())
         {
-            csvFile << "FileName,MeanCentroid,Delta,TopEndHeavyCount,LowEndHeavyCount" << std::endl;
+            csvFile << "FileName,MeanCentroid,Delta,TopEndHeavyCount,LowEndHeavyCount,HighLowDecayRatio" << std::endl;
         }
     };
     void activate();
@@ -517,6 +517,7 @@ public:
     std::array<MouthHit, numHits> storedHits;
     // Results live here:
     std::vector<ClassifiedHit> classifiedHits;
+    std::ofstream csvFile;
 private:
     /*
     static constexpr int numHits = 64;
@@ -580,5 +581,4 @@ private:
     StatisticalOnsetDetector onsetDetector { statisticalRatioThreshold, statisticalAbsoluteThreshold, baseMeanLength, historyMeanLength };
     
     ComplexOdf complexOnsetDetector{10, 44100};
-    std::ofstream csvFile;
 };

@@ -8,6 +8,7 @@
 
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "hitClassifier.h"
 
 //void saveOutput(juce::AudioBuffer<float> buff)
 //{
@@ -80,9 +81,9 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
         fileOpener([this] (const juce::File& file)
         {
             std::cout << "starting the\n";
-            audioProcessor.processUploadedLoop(file);
-            if (false) {
-                juce::File snaresDir ("/Users/lightspark/Documents/JuceProjects/HackBrown2026/Data/Hats");
+            //audioProcessor.processUploadedLoop(file);
+            if (true) {
+                juce::File snaresDir ("/Users/lightspark/Documents/JuceProjects/HackBrown2026/Data/Snares");
 
                 // Defensive check: Ensure the folder actually exists on your disk
                 if (snaresDir.isDirectory())
@@ -104,6 +105,18 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
             }
         });
         
+        if (p.inputProcessor.csvFile.is_open())
+        {
+            // 4. Access using HitClassifier::
+            p.inputProcessor.csvFile << "means: "
+                    << std::fixed << std::setprecision(4) << ","
+                    << HitClassifier::totalFeatures.meanCentroid << ","
+                    << HitClassifier::totalFeatures.centroidDelta << ","
+                    << HitClassifier::totalFeatures.topEndHeavyRatio << ","
+                    << HitClassifier::totalFeatures.lowEndHeavyRatio << ","
+                    << HitClassifier::totalFeatures.decayRatio << std::endl;
+        }
+            
         addAndMakeVisible(playButton);
     };
 

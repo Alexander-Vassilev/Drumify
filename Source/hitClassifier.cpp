@@ -2,6 +2,8 @@
 #include "utils.h"
 #include <algorithm>
 
+PooledHitFeatures HitClassifier::totalFeatures {};
+
 float HitClassifier::computeRMS(const juce::AudioBuffer<float>& buffer, int length)
 {
     if (length <= 0 || buffer.getNumSamples() <= 0)
@@ -77,9 +79,10 @@ HitFeatures HitClassifier::extractFeatures(const juce::AudioBuffer<float>& buffe
 
 float HitClassifier::getDelta(const std::vector<float>& values, const std::vector<float>& volumes)
 {
+    const int intendedFrameCount = 6;
     // 1. Guard: Ensure vectors are valid, match in size, and have at least 6 frames
     const int numFrames = static_cast<int>(values.size());
-    if (numFrames < 6 || volumes.size() != values.size())
+    if (numFrames < intendedFrameCount || volumes.size() != values.size())
         return 0.0f;
 
     // 2. Find the peak of the volume (energy) in the first 9 frames
@@ -89,11 +92,11 @@ float HitClassifier::getDelta(const std::vector<float>& values, const std::vecto
 
     // 3. Clamp peakIndex so we can always fit exactly 6 frames [C++17 std::clamp]
     // The maximum possible starting index is (numFrames - 6)
-    peakIndex = std::clamp(peakIndex, 0, numFrames - 6);
+    peakIndex = std::clamp(peakIndex, 0, numFrames - intendedFrameCount);
 
     // Constant parameters for exactly 6 iterations
-    const float M = 6.0f;
-    const int loopEnd = peakIndex + 6;
+    const float M = static_cast<float>(intendedFrameCount);
+    const int loopEnd = peakIndex + intendedFrameCount;
 
     float sumX  = 0.0f;
     float sumY  = 0.0f;
@@ -185,6 +188,7 @@ HitType HitClassifier::classify(const HitFeatures& f, std::ofstream& csvFile)
         std::vector<float> avgLowEnergies;
         std::vector<float> avgLowMidEnergies;
         std::vector<float> avgMidEnergies;
+        std::vector<float> avgMidHighEnergies;
         std::vector<float> avgHighEnergies;
         std::vector<float> prominences;
         std::vector<float> totalEnergies;
@@ -212,6 +216,7 @@ HitType HitClassifier::classify(const HitFeatures& f, std::ofstream& csvFile)
             float lowEnergy = DrumFeatureExtractor::calculateAvgEnergyInBand(fftFilterbank, 0, 3);
             float lowMidEnergy = DrumFeatureExtractor::calculateAvgEnergyInBand(fftFilterbank, 0, 5);
             float midEnergy = DrumFeatureExtractor::calculateAvgEnergyInBand(fftFilterbank, 5, 12);
+            float midHighEnergy = DrumFeatureExtractor::calculateAvgEnergyInBand(fftFilterbank, 14, 23);
             float highEnergy = DrumFeatureExtractor::calculateAvgEnergyInBand(fftFilterbank, 17, 25);
             
             spectralCentroids.push_back(centroid);
@@ -219,6 +224,7 @@ HitType HitClassifier::classify(const HitFeatures& f, std::ofstream& csvFile)
             avgLowEnergies.push_back(lowEnergy);
             avgLowMidEnergies.push_back(lowMidEnergy);
             avgMidEnergies.push_back(midEnergy);
+            avgMidHighEnergies.push_back(midHighEnergy);
             avgHighEnergies.push_back(highEnergy);
             totalEnergies.push_back(totalEnergy);
         }
@@ -272,13 +278,31 @@ HitType HitClassifier::classify(const HitFeatures& f, std::ofstream& csvFile)
             // C. Calculate Delta (Spectral Shift Direction: End - Start)
             //pooledFeatures.centroidDelta = getDelta(spectralCentroids);
             pooledFeatures.centroidDelta = getDelta(avgLowMidEnergies, totalEnergies);
+            
+            pooledFeatures.lowDecayCentroid  = DrumFeatureExtractor::calculateTemporalCentroid(avgLowEnergies);
+            pooledFeatures.highDecayCentroid = DrumFeatureExtractor::calculateTemporalCentroid(avgMidHighEnergies);
+            
+            pooledFeatures.decayRatio = pooledFeatures.lowDecayCentroid / (pooledFeatures.highDecayCentroid + 1e-5f);
+            
+            DBG (juce::String::formatted (
+                "Decay -> Lows: %-5.2f | Highs: %-5.2f | Ratio (L/H): %-5.2f",
+                pooledFeatures.lowDecayCentroid,
+                pooledFeatures.highDecayCentroid,
+                pooledFeatures.decayRatio
+            ));
         }
         
         // Print the resulting dynamic footprint
         DBG (juce::String::formatted (
-            "Mean Centroid: %-6.2f | Delta: %-6.2f | TopEndHeavyCount: %-6.2f | LowEndHeavyCount: %-6.2f",
-            pooledFeatures.meanCentroid, pooledFeatures.centroidDelta, pooledFeatures.topEndHeavyRatio, pooledFeatures.lowEndHeavyRatio
+            "Mean Centroid: %-6.2f | Delta: %-6.2f | TopEndHeavyCount: %-6.2f | LowEndHeavyCount: %-6.2f | HighLowDecayRatio: %-6.2f",
+            pooledFeatures.meanCentroid,
+            pooledFeatures.centroidDelta,
+            pooledFeatures.topEndHeavyRatio,
+            pooledFeatures.lowEndHeavyRatio,
+            pooledFeatures.decayRatio
         ));
+        
+        increaseFeatureCount(pooledFeatures);
         
         if (csvFile.is_open())
         {
@@ -287,7 +311,8 @@ HitType HitClassifier::classify(const HitFeatures& f, std::ofstream& csvFile)
                     << pooledFeatures.meanCentroid << ","
                     << pooledFeatures.centroidDelta << ","
                     << pooledFeatures.topEndHeavyRatio << ","
-                    << pooledFeatures.lowEndHeavyRatio << std::endl;
+                    << pooledFeatures.lowEndHeavyRatio << ","
+                    << pooledFeatures.decayRatio << std::endl;
         }
         
         DBG("Hat Probabilities:");

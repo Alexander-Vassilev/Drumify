@@ -23,6 +23,10 @@ struct PooledHitFeatures
     float meanLowMidProminence = 0.0f;
     float topEndHeavyRatio = 0.0f;
     float lowEndHeavyRatio = 0.0f;
+    
+    float lowDecayCentroid = 0.0f;  // Center of mass for low decay
+    float highDecayCentroid = 0.0f; // Center of mass for high decay
+    float decayRatio = 0.0f;        // Low decay divided by High decay
 };
 
 struct HitFeatures
@@ -186,6 +190,22 @@ public:
         
         return (totalSum > 1e-5f) ? (totalSum / static_cast<float>(totalBins)) : 0.0f;
     }
+    
+    static float calculateTemporalCentroid(const std::vector<float>& envelope)
+    {
+        float sumEnergy = 0.0f;
+        float weightedSum = 0.0f;
+        
+        for (size_t t = 0; t < envelope.size(); ++t)
+        {
+            float energy = envelope[t];
+            weightedSum += static_cast<float>(t) * energy;
+            sumEnergy += energy;
+        }
+        
+        // Returns average frame index where the energy lives
+        return (sumEnergy > 1e-5f) ? (weightedSum / sumEnergy) : 0.0f;
+    }
 };
 
 class HitClassifier
@@ -197,10 +217,20 @@ public:
     static const char* toString(HitType t);
     
     FFTProcessor fft;
+    static PooledHitFeatures totalFeatures; // To find stats across all hits
 private:
     static float computeRMS(const juce::AudioBuffer<float>& buffer, int length);
     static float computeZeroCrossingRate(const juce::AudioBuffer<float>& buffer, int length);
     static float getDelta(const std::vector<float>& values, const std::vector<float>& volumes);
     static double calculateGaussianPDF(double x, double mean, double stdev);
     static double calculateClassLikelihood(const PooledHitFeatures& f, const DrumClassParameters& params);
+    static void increaseFeatureCount(PooledHitFeatures& f) {
+        HitClassifier::totalFeatures.meanCentroid += f.meanCentroid;
+        HitClassifier::totalFeatures.centroidDelta += f.centroidDelta;
+        HitClassifier::totalFeatures.topEndHeavyRatio += f.topEndHeavyRatio;
+        HitClassifier::totalFeatures.lowEndHeavyRatio += f.lowEndHeavyRatio;
+        HitClassifier::totalFeatures.decayRatio += f.decayRatio;
+        
+        std::cout << "total centroid: " << HitClassifier::totalFeatures.meanCentroid << std::endl;
+    }
 };
