@@ -22,6 +22,44 @@
         <FILE id="IjcVWC" name="Hat.wav" compile="0" resource="1" file="DrumSamples/Hat.wav"/>
         <FILE id="u1utX3" name="Kick.wav" compile="0" resource="1" file="DrumSamples/Kick.wav"/>
         <FILE id="jezoTa" name="Snare.wav" compile="0" resource="1" file="DrumSamples/Snare.wav"/>
+        <FILE id="8cxlWq" name="Save-MIDI.png" compile="0" resource="1" file="DrumifyAssets/Save-MIDI.png"/>
+        <FILE id="NjnHRC" name="Save-Audio.png" compile="0" resource="1" file="DrumifyAssets/Save-Audio.png"/>
+        <FILE id="CPbBns" name="Speakers-BG.png" compile="0" resource="1" file="DrumifyAssets/Speakers-BG.png"/>
+        <FILE id="Ee1Nlh" name="Speakers-Left.png" compile="0" resource="1" file="DrumifyAssets/Speakers-Left.png"/>
+        <FILE id="91hG6g" name="Speakers-Right.png" compile="0" resource="1" file="DrumifyAssets/Speakers-Right.png"/>
+        <FILE id="Yb9Do9" name="Speakers-PreviewAudio.png" compile="0" resource="1" file="DrumifyAssets/Speakers-PreviewAudio.png"/>
+        <FILE id="UgGoCE" name="Speakers-PreviewInput.png" compile="0" resource="1" file="DrumifyAssets/Speakers-PreviewInput.png"/>
+        <FILE id="Iy9GHD" name="Speakers-PreviewOutput.png" compile="0" resource="1" file="DrumifyAssets/Speakers-PreviewOutput.png"/>
+        <FILE id="ekRX6G" name="Mic-StopRecording.png" compile="0" resource="1" file="DrumifyAssets/Mic-StopRecording.png"/>
+        <FILE id="ZWQrZv" name="Mic-Recording.png" compile="0" resource="1" file="DrumifyAssets/Mic-Recording.png"/>
+        <FILE id="rM7Ozp" name="Save-Paint.png" compile="0" resource="1" file="DrumifyAssets/Save-Paint.png"/>
+        <FILE id="Q7bL0d" name="Save-Keyboard.png" compile="0" resource="1" file="DrumifyAssets/Save-Keyboard.png"/>
+        <FILE id="ZkFjFS" name="Save-Loop.png" compile="0" resource="1" file="DrumifyAssets/Save-Loop.png"/>
+        <FILE id="K7q7zm" name="Save-SaveOutput.png" compile="0" resource="1" file="DrumifyAssets/Save-SaveOutput.png"/>
+        <FILE id="NPKZZp" name="Drumkit-FullKit.png" compile="0" resource="1" file="DrumifyAssets/Drumkit-FullKit.png"/>
+        <FILE id="KvBfcB" name="Drumkit-Hats.png" compile="0" resource="1" file="DrumifyAssets/Drumkit-Hats.png"/>
+        <FILE id="fn7kkI" name="Drumkit-UploadDrumhits.png" compile="0" resource="1" file="DrumifyAssets/Drumkit-UploadDrumhits.png"/>
+        <FILE id="XglACG" name="Mic-CapsuleBackRecording.png" compile="0" resource="1" file="DrumifyAssets/Mic-CapsuleBackRecording.png"/>
+        <FILE id="T2z7yF" name="Mic-BottomCapsuleRecording.png" compile="0" resource="1" file="DrumifyAssets/Mic-BottomCapsuleRecording.png"/>
+        <FILE id="ayFOE3" name="Background.png" compile="0" resource="1" file="DrumifyAssets/Background.png"/>
+        <FILE id="zmCrMf" name="CapsuleBack.png" compile="0" resource="1" file="DrumifyAssets/CapsuleBack.png"/>
+        <FILE id="bc6eC1" name="DrumifyTitle.png" compile="0" resource="1" file="DrumifyAssets/DrumifyTitle.png"/>
+        <FILE id="9JFqxx" name="Drumkit-Kick.png" compile="0" resource="1" file="DrumifyAssets/Drumkit-Kick.png"/>
+        <FILE id="rPJ4ct" name="Drumkit-Snare.png" compile="0" resource="1" file="DrumifyAssets/Drumkit-Snare.png"/>
+        <FILE id="y10DGE" name="Drumkit-UploadHat.png" compile="0" resource="1" file="DrumifyAssets/Drumkit-UploadHat.png"/>
+        <FILE id="qfweaR" name="Drumkit-UploadKick.png" compile="0" resource="1" file="DrumifyAssets/Drumkit-UploadKick.png"/>
+        <FILE id="YqbNs7" name="Drumkit-UploadSnare.png" compile="0" resource="1" file="DrumifyAssets/Drumkit-UploadSnare.png"/>
+        <FILE id="0XBnuS" name="Menu-Plus.png" compile="0" resource="1" file="DrumifyAssets/Menu-Plus.png"/>
+        <FILE id="T7CnUl" name="Menu-Question.png" compile="0" resource="1" file="DrumifyAssets/Menu-Question.png"/>
+        <FILE id="AjBq5k" name="Menu-update.png" compile="0" resource="1" file="DrumifyAssets/Menu-update.png"/>
+        <FILE id="urHiUv" name="Mic-BottomCapsuleNoRing.png" compile="0" resource="1" file="DrumifyAssets/Mic-BottomCapsuleNoRing.png"/>
+        <FILE id="Rqm5FH" name="Mic-BottomCapsuleRing.png" compile="0" resource="1" file="DrumifyAssets/Mic-BottomCapsuleRing.png"/>
+        <FILE id="AhNxoL" name="Mic-Handle.png" compile="0" resource="1" file="DrumifyAssets/Mic-Handle.png"/>
+        <FILE id="KH29VW" name="Mic-Input.png" compile="0" resource="1" file="DrumifyAssets/Mic-Input.png"/>
+        <FILE id="74ZegR" name="Mic-Record.png" compile="0" resource="1" file="DrumifyAssets/Mic-Record.png"/>
+        <FILE id="T35b7V" name="Mic-TopCapsuleNoRing.png" compile="0" resource="1" file="DrumifyAssets/Mic-TopCapsuleNoRing.png"/>
+        <FILE id="9Wxvu5" name="Mic-TopCapsuleRing.png" compile="0" resource="1" file="DrumifyAssets/Mic-TopCapsuleRing.png"/>
+        <FILE id="W8aY8t" name="Mic-UploadLoop.png" compile="0" resource="1" file="DrumifyAssets/Mic-UploadLoop.png"/>
       </GROUP>
       <FILE id="W6CyyJ" name="SineGenerator.h" compile="0" resource="0" file="Source/SineGenerator.h"/>
       <FILE id="xG5WNG" name="PluginProcessor.cpp" compile="1" resource="0"

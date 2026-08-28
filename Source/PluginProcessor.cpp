@@ -548,13 +548,22 @@ void HackBrownAudioProcessor::recordAudio(juce::AudioBuffer<float>& buffer) {
 void HackBrownAudioProcessor::playAudio(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages) {
     buffer.clear();
 
-    //juce::AudioBuffer<float>& readBuff;
+    const auto& source = previewingInput.load() ? inputPreviewBuffer : renderedDrumBuffer;
+
+    // Nothing captured or rendered yet, so there is nothing to preview.
+    if (source.getNumChannels() == 0 || source.getNumSamples() == 0) {
+        isPlayingRendered = false;
+        isPlaybackOn.store(false);
+        renderedReadPos = 0;
+        midiMessages.clear();
+        return;
+    }
 
     const int numSamples = buffer.getNumSamples();
-    const int remaining = renderedDrumBuffer.getNumSamples() - renderedReadPos;
+    const int remaining = source.getNumSamples() - renderedReadPos;
     const int toCopy = juce::jmin(numSamples, remaining);
 
-    auto* inputData = renderedDrumBuffer.getReadPointer(0);
+    auto* inputData = source.getReadPointer(0);
 
     for (int ch = 0; ch < buffer.getNumChannels(); ++ch) {
         //buffer.copyFrom(ch, 0, renderedDrumBuffer, juce::jmin(ch, renderedDrumBuffer.getNumChannels()-1),
@@ -572,7 +581,7 @@ void HackBrownAudioProcessor::playAudio(juce::AudioBuffer<float>& buffer, juce::
 
     renderedReadPos += toCopy;
 
-    if (renderedReadPos >= renderedDrumBuffer.getNumSamples()) {
+    if (renderedReadPos >= source.getNumSamples()) {
         DBG("Stop playback");
         isPlayingRendered = false;
         isPlaybackOn.store(false);
@@ -580,6 +589,19 @@ void HackBrownAudioProcessor::playAudio(juce::AudioBuffer<float>& buffer, juce::
     }
 
     midiMessages.clear();
+}
+
+void HackBrownAudioProcessor::startPreview(PreviewSource source) {
+    // Stop first so the audio thread cannot be reading while the buffer is swapped.
+    isPlaybackOn.store(false);
+
+    if (source == PreviewSource::input) {
+        inputPreviewBuffer = inputProcessor.hitsToBuffer();
+    }
+
+    previewingInput.store(source == PreviewSource::input);
+    renderedReadPos = 0;
+    isPlaybackOn.store(true);
 }
 
 void HackBrownAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages) {

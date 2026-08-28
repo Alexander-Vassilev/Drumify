@@ -10,250 +10,1186 @@
 #include "PluginEditor.h"
 #include "hitClassifier.h"
 
-//void saveOutput(juce::AudioBuffer<float> buff)
-//{
-//    juce::File outputFile("/Users/lightspark/Documents/JuceProjects/HackBrown2026/analysis1.wav");
-//    
-//    if (outputFile.existsAsFile()) {
-//        outputFile.deleteFile();
-//    }
-//    
-//    auto outStream = outputFile.createOutputStream();
-//    
-//    if (outStream != nullptr) {
-//        juce::WavAudioFormat format;
-//        std::unique_ptr<juce::AudioFormatWriter> writer(
-//            format.createWriterFor(outStream.release(), 44100, buff.getNumChannels(), 32, {}, 0));
-//        
-//        if (writer != nullptr) {
-//            writer->writeFromAudioSampleBuffer(buff, 0, buff.getNumSamples());
-//        }
-//    }
-//}
+//==============================================================================
+// The copy shown by the "?" button in the top row. Replace this with the real
+// text - it is the only thing the info popup renders.
+static const char* const infoPanelText =
+    "Beatbox a groove into your mic and Drumify works out which hits are kicks, "
+    "snares and hats, then plays the pattern back using the samples you drop in.\n"
+    "\n"
+    "Hover a drum in the kit to load the sample it should trigger. Hover the top "
+    "of the microphone to record, or the bottom to upload a loop instead.\n"
+    "\n"
+    "(Placeholder text - write the real thing here.)";
+
+//==============================================================================
+juce::Font DrumifyTheme::mono (float height, bool bold)
+{
+    static const juce::String faceName = []
+    {
+        const auto installed = juce::Font::findAllTypefaceNames();
+
+        for (const auto* preferred : { "Courier New", "Courier" })
+            if (installed.contains (preferred, true))
+                return juce::String (preferred);
+
+        return juce::Font::getDefaultMonospacedFontName();
+    }();
+
+    return juce::Font (juce::FontOptions {}
+                          .withName (faceName)
+                          .withHeight (height)
+                          .withStyle (bold ? "Bold" : "Regular"));
+}
+
+void DrumifyTheme::paintPanel (juce::Graphics& g, juce::Rectangle<float> bounds,
+                               float corner, bool highlighted, bool down)
+{
+    auto left  = panelLeft;
+    auto right = panelRight;
+
+    if (down)
+    {
+        left  = left.darker (0.10f);
+        right = right.darker (0.10f);
+    }
+    else if (highlighted)
+    {
+        left  = left.brighter (0.06f);
+        right = right.brighter (0.06f);
+    }
+
+    juce::Path shape;
+    shape.addRoundedRectangle (bounds, corner);
+
+    juce::DropShadow (juce::Colours::black.withAlpha (down ? 0.18f : 0.28f),
+                      down ? 5 : 9,
+                      { 2, down ? 2 : 4 }).drawForPath (g, shape);
+
+    g.setGradientFill (juce::ColourGradient (left,  bounds.getX(),     bounds.getCentreY(),
+                                             right, bounds.getRight(), bounds.getCentreY(), false));
+    g.fillPath (shape);
+
+    g.setColour (panelEdge);
+    g.drawRoundedRectangle (bounds.reduced (0.5f), corner, 1.2f);
+}
+
+//==============================================================================
+/** Scans the alpha channel for the bounds of everything actually drawn. */
+static juce::Rectangle<int> findOpaqueBounds (const juce::Image& image)
+{
+    if (! image.isValid())
+        return {};
+
+    const juce::Image::BitmapData data (image, juce::Image::BitmapData::readOnly);
+
+    if (data.pixelFormat != juce::Image::ARGB)
+        return image.getBounds();
+
+    int minX = image.getWidth(), minY = image.getHeight(), maxX = -1, maxY = -1;
+
+    for (int y = 0; y < image.getHeight(); ++y)
+    {
+        for (int x = 0; x < image.getWidth(); ++x)
+        {
+            if (reinterpret_cast<const juce::PixelARGB*> (data.getPixelPointer (x, y))->getAlpha() > 8)
+            {
+                minX = juce::jmin (minX, x);
+                maxX = juce::jmax (maxX, x);
+                minY = juce::jmin (minY, y);
+                maxY = juce::jmax (maxY, y);
+            }
+        }
+    }
+
+    if (maxX < 0)
+        return {};
+
+    return { minX, minY, maxX - minX + 1, maxY - minY + 1 };
+}
+
+void AssetLayer::load (const void* data, int dataSize)
+{
+    image = juce::ImageCache::getFromMemory (data, dataSize);
+    content = findOpaqueBounds (image);
+}
+
+void AssetLayer::drawFrame (juce::Graphics& g, juce::Rectangle<float> frame,
+                            float opacity, float highlight) const
+{
+    if (! image.isValid() || frame.isEmpty())
+        return;
+
+    const auto transform = juce::AffineTransform::scale (frame.getWidth()  / (float) image.getWidth(),
+                                                         frame.getHeight() / (float) image.getHeight())
+                             .translated (frame.getX(), frame.getY());
+
+    g.setOpacity (opacity);
+    g.drawImageTransformed (image, transform, false);
+
+    if (highlight > 0.0f)
+    {
+        // Filling the alpha channel with a flat brush brightens the artwork
+        // without washing out its silhouette.
+        g.setColour (juce::Colours::white.withAlpha (highlight));
+        g.drawImageTransformed (image, transform, true);
+    }
+
+    g.setOpacity (1.0f);
+}
+
+void AssetLayer::drawContent (juce::Graphics& g, juce::Rectangle<float> target,
+                              float opacity, float highlight) const
+{
+    if (content.isEmpty())
+        return;
+
+    const auto sx = target.getWidth()  / (float) content.getWidth();
+    const auto sy = target.getHeight() / (float) content.getHeight();
+
+    drawFrame (g, { target.getX() - (float) content.getX() * sx,
+                    target.getY() - (float) content.getY() * sy,
+                    (float) image.getWidth()  * sx,
+                    (float) image.getHeight() * sy },
+               opacity, highlight);
+}
+
+void AssetLayer::drawScaledAbout (juce::Graphics& g, juce::Point<float> centre, float scale,
+                                  float opacity, float highlight) const
+{
+    if (! image.isValid())
+        return;
+
+    drawFrame (g, juce::Rectangle<float> ((float) image.getWidth()  * scale,
+                                          (float) image.getHeight() * scale).withCentre (centre),
+               opacity, highlight);
+}
+
+bool AssetLayer::hitsContent (juce::Rectangle<float> frame, juce::Point<float> p, float tolerance) const
+{
+    if (! image.isValid() || frame.isEmpty())
+        return false;
+
+    const juce::Image::BitmapData data (image, juce::Image::BitmapData::readOnly);
+
+    if (data.pixelFormat != juce::Image::ARGB)
+        return frame.contains (p);
+
+    const auto sx = (float) image.getWidth()  / frame.getWidth();
+    const auto sy = (float) image.getHeight() / frame.getHeight();
+
+    const juce::Point<float> offsets[]
+    {
+        { 0.0f, 0.0f },
+        { -tolerance, 0.0f }, { tolerance, 0.0f },
+        { 0.0f, -tolerance }, { 0.0f, tolerance },
+        { -tolerance, -tolerance }, { tolerance, -tolerance },
+        { -tolerance, tolerance }, { tolerance, tolerance }
+    };
+
+    for (const auto& offset : offsets)
+    {
+        const auto x = juce::roundToInt ((p.x + offset.x - frame.getX()) * sx);
+        const auto y = juce::roundToInt ((p.y + offset.y - frame.getY()) * sy);
+
+        if (juce::isPositiveAndBelow (x, image.getWidth())
+             && juce::isPositiveAndBelow (y, image.getHeight())
+             && reinterpret_cast<const juce::PixelARGB*> (data.getPixelPointer (x, y))->getAlpha() > 30)
+            return true;
+    }
+
+    return false;
+}
+
+juce::Rectangle<float> AssetLayer::fitContent (juce::Rectangle<float> box, float scale) const
+{
+    if (content.isEmpty())
+        return box;
+
+    const auto aspect = (float) content.getWidth() / (float) content.getHeight();
+
+    auto w = box.getWidth();
+    auto h = w / aspect;
+
+    if (h > box.getHeight())
+    {
+        h = box.getHeight();
+        w = h * aspect;
+    }
+
+    return juce::Rectangle<float> (w * scale, h * scale).withCentre (box.getCentre());
+}
+
+//==============================================================================
+DrumifyAssets::DrumifyAssets()
+{
+    background.load (BinaryData::Background_png,   BinaryData::Background_pngSize);
+    title.load      (BinaryData::DrumifyTitle_png, BinaryData::DrumifyTitle_pngSize);
+
+    menuUpdate.load   (BinaryData::Menuupdate_png,   BinaryData::Menuupdate_pngSize);
+    menuPlus.load     (BinaryData::MenuPlus_png,     BinaryData::MenuPlus_pngSize);
+    menuQuestion.load (BinaryData::MenuQuestion_png, BinaryData::MenuQuestion_pngSize);
+
+    kit.load   (BinaryData::DrumkitFullKit_png, BinaryData::DrumkitFullKit_pngSize);
+    kick.load  (BinaryData::DrumkitKick_png,    BinaryData::DrumkitKick_pngSize);
+    snare.load (BinaryData::DrumkitSnare_png,   BinaryData::DrumkitSnare_pngSize);
+    hats.load  (BinaryData::DrumkitHats_png,    BinaryData::DrumkitHats_pngSize);
+
+    labelUploadDrumhits.load (BinaryData::DrumkitUploadDrumhits_png, BinaryData::DrumkitUploadDrumhits_pngSize);
+    labelUploadKick.load     (BinaryData::DrumkitUploadKick_png,     BinaryData::DrumkitUploadKick_pngSize);
+    labelUploadSnare.load    (BinaryData::DrumkitUploadSnare_png,    BinaryData::DrumkitUploadSnare_pngSize);
+    labelUploadHat.load      (BinaryData::DrumkitUploadHat_png,      BinaryData::DrumkitUploadHat_pngSize);
+
+    capsuleBack.load  (BinaryData::CapsuleBack_png,             BinaryData::CapsuleBack_pngSize);
+    topNoRing.load    (BinaryData::MicTopCapsuleNoRing_png,     BinaryData::MicTopCapsuleNoRing_pngSize);
+    topRing.load      (BinaryData::MicTopCapsuleRing_png,       BinaryData::MicTopCapsuleRing_pngSize);
+    bottomNoRing.load (BinaryData::MicBottomCapsuleNoRing_png,  BinaryData::MicBottomCapsuleNoRing_pngSize);
+    bottomRing.load   (BinaryData::MicBottomCapsuleRing_png,    BinaryData::MicBottomCapsuleRing_pngSize);
+    handle.load       (BinaryData::MicHandle_png,               BinaryData::MicHandle_pngSize);
+
+    capsuleBackRecording.load (BinaryData::MicCapsuleBackRecording_png,   BinaryData::MicCapsuleBackRecording_pngSize);
+    bottomRecording.load      (BinaryData::MicBottomCapsuleRecording_png, BinaryData::MicBottomCapsuleRecording_pngSize);
+
+    labelInput.load         (BinaryData::MicInput_png,         BinaryData::MicInput_pngSize);
+    labelRecord.load        (BinaryData::MicRecord_png,        BinaryData::MicRecord_pngSize);
+    labelStopRecording.load (BinaryData::MicStopRecording_png, BinaryData::MicStopRecording_pngSize);
+    labelRecording.load     (BinaryData::MicRecording_png,     BinaryData::MicRecording_pngSize);
+    labelUploadLoop.load    (BinaryData::MicUploadLoop_png,    BinaryData::MicUploadLoop_pngSize);
+
+    speakerBg.load    (BinaryData::SpeakersBG_png,    BinaryData::SpeakersBG_pngSize);
+    speakerLeft.load  (BinaryData::SpeakersLeft_png,  BinaryData::SpeakersLeft_pngSize);
+    speakerRight.load (BinaryData::SpeakersRight_png, BinaryData::SpeakersRight_pngSize);
+
+    labelPreviewAudio.load  (BinaryData::SpeakersPreviewAudio_png,  BinaryData::SpeakersPreviewAudio_pngSize);
+    labelPreviewInput.load  (BinaryData::SpeakersPreviewInput_png,  BinaryData::SpeakersPreviewInput_pngSize);
+    labelPreviewOutput.load (BinaryData::SpeakersPreviewOutput_png, BinaryData::SpeakersPreviewOutput_pngSize);
+
+    savePaint.load       (BinaryData::SavePaint_png,       BinaryData::SavePaint_pngSize);
+    saveKeyboard.load    (BinaryData::SaveKeyboard_png,    BinaryData::SaveKeyboard_pngSize);
+    saveLoop.load        (BinaryData::SaveLoop_png,        BinaryData::SaveLoop_pngSize);
+    labelSaveMidi.load   (BinaryData::SaveMIDI_png,        BinaryData::SaveMIDI_pngSize);
+    labelSaveAudio.load  (BinaryData::SaveAudio_png,       BinaryData::SaveAudio_pngSize);
+    labelSaveOutput.load (BinaryData::SaveSaveOutput_png,  BinaryData::SaveSaveOutput_pngSize);
+}
+
+//==============================================================================
+DrumifyLookAndFeel::DrumifyLookAndFeel()
+{
+    setColour (juce::TextButton::textColourOffId, DrumifyTheme::ink);
+    setColour (juce::TextButton::textColourOnId,  DrumifyTheme::ink);
+    setColour (juce::Label::textColourId,         DrumifyTheme::ink);
+
+    setColour (juce::Slider::backgroundColourId,        DrumifyTheme::panelEdge.withAlpha (0.35f));
+    setColour (juce::Slider::trackColourId,             DrumifyTheme::ink.withAlpha (0.55f));
+    setColour (juce::Slider::thumbColourId,             DrumifyTheme::ink);
+    setColour (juce::Slider::textBoxTextColourId,       DrumifyTheme::ink);
+    setColour (juce::Slider::textBoxBackgroundColourId, juce::Colours::white.withAlpha (0.45f));
+    setColour (juce::Slider::textBoxOutlineColourId,    DrumifyTheme::panelEdge);
+}
+
+juce::Font DrumifyLookAndFeel::getTextButtonFont (juce::TextButton&, int buttonHeight)
+{
+    return DrumifyTheme::mono (juce::jlimit (12.0f, 18.0f, (float) buttonHeight * 0.32f));
+}
+
+void DrumifyLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& button,
+                                               const juce::Colour&,
+                                               bool shouldDrawButtonAsHighlighted,
+                                               bool shouldDrawButtonAsDown)
+{
+    auto bounds = button.getLocalBounds().toFloat().reduced (4.0f);
+    DrumifyTheme::paintPanel (g, bounds, juce::jmin (bounds.getHeight(), bounds.getWidth()) * 0.22f,
+                              shouldDrawButtonAsHighlighted, shouldDrawButtonAsDown);
+}
+
+void DrumifyLookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& button, bool, bool)
+{
+    const auto font = getTextButtonFont (button, button.getHeight());
+    g.setFont (font);
+    g.setColour (DrumifyTheme::ink);
+
+    juce::StringArray lines;
+    lines.addLines (button.getButtonText());
+
+    const auto lineHeight = font.getHeight() * 1.28f;
+    auto y = (float) button.getHeight() * 0.5f - lineHeight * (float) lines.size() * 0.5f;
+
+    for (const auto& line : lines)
+    {
+        g.drawText (line, juce::Rectangle<float> (0.0f, y, (float) button.getWidth(), lineHeight),
+                    juce::Justification::centred);
+        y += lineHeight;
+    }
+}
+
+void DrumifyLookAndFeel::drawCallOutBoxBackground (juce::CallOutBox&, juce::Graphics& g,
+                                                   const juce::Path& path, juce::Image&)
+{
+    juce::DropShadow (juce::Colours::black.withAlpha (0.30f), 12, { 0, 5 }).drawForPath (g, path);
+
+    const auto area = path.getBounds();
+    g.setGradientFill (juce::ColourGradient (DrumifyTheme::popupLeft,  area.getX(),     area.getY(),
+                                             DrumifyTheme::popupRight, area.getRight(), area.getBottom(), false));
+    g.fillPath (path);
+
+    g.setColour (DrumifyTheme::panelEdge);
+    g.strokePath (path, juce::PathStrokeType (1.4f));
+}
+
+//==============================================================================
+AssetButton::AssetButton (const AssetLayer& layerToDraw, const juce::String& buttonName)
+    : juce::Button (buttonName), layer (layerToDraw)
+{
+    setTooltip (buttonName);
+}
+
+void AssetButton::paintButton (juce::Graphics& g, bool shouldDrawButtonAsHighlighted,
+                               bool shouldDrawButtonAsDown)
+{
+    const auto scale = shouldDrawButtonAsDown ? 0.94f : (shouldDrawButtonAsHighlighted ? 1.12f : 1.0f);
+    const auto highlight = shouldDrawButtonAsHighlighted ? 0.22f : 0.0f;
+
+    layer.drawContent (g, layer.fitContent (getLocalBounds().toFloat().reduced (4.0f), scale),
+                       1.0f, highlight);
+}
+
+//==============================================================================
+DrumKitComponent::DrumKitComponent (const DrumifyAssets& a)
+    : assets (a)
+{
+    setMouseCursor (juce::MouseCursor::PointingHandCursor);
+}
+
+const AssetLayer* DrumKitComponent::layerFor (Zone z) const
+{
+    switch (z)
+    {
+        case Zone::kick:  return &assets.kick;
+        case Zone::snare: return &assets.snare;
+        case Zone::hats:  return &assets.hats;
+        case Zone::none:  break;
+    }
+
+    return nullptr;
+}
+
+DrumKitComponent::Zone DrumKitComponent::zoneAt (juce::Point<float> p) const
+{
+    const auto frame = getLocalBounds().toFloat();
+
+    // Each drum acts as its own hit region, so the shapes match the artwork
+    // exactly. Ordered so the drums win where a cymbal stand passes behind them.
+    for (auto z : { Zone::kick, Zone::snare, Zone::hats })
+        if (layerFor (z)->hitsContent (frame, p, DrumifyLayout::drumHoverTolerance))
+            return z;
+
+    return Zone::none;
+}
+
+bool DrumKitComponent::hitTest (int x, int y)
+{
+    return zoneAt ({ (float) x, (float) y }) != Zone::none;
+}
+
+void DrumKitComponent::setZone (Zone z)
+{
+    if (zone != z)
+    {
+        zone = z;
+        repaint();
+    }
+}
+
+void DrumKitComponent::mouseMove (const juce::MouseEvent& e) { setZone (zoneAt (e.position)); }
+void DrumKitComponent::mouseExit (const juce::MouseEvent&)   { setZone (Zone::none); }
+
+void DrumKitComponent::mouseUp (const juce::MouseEvent& e)
+{
+    const auto z = zoneAt (e.position);
+
+    if (e.mouseWasClicked() && z != Zone::none && onZoneClicked != nullptr)
+        onZoneClicked (z);
+}
+
+void DrumKitComponent::paint (juce::Graphics& g)
+{
+    const auto frame = getLocalBounds().toFloat();
+
+    // The layers are exported already aligned, so redrawing the hovered drum on
+    // top of the faded kit leaves it at full strength in its original place.
+    assets.kit.drawFrame (g, frame, zone == Zone::none ? 1.0f : 0.4f);
+
+    if (const auto* drum = layerFor (zone))
+        drum->drawFrame (g, frame);
+
+    const AssetLayer* label = &assets.labelUploadDrumhits;
+
+    switch (zone)
+    {
+        case Zone::kick:  label = &assets.labelUploadKick;  break;
+        case Zone::snare: label = &assets.labelUploadSnare; break;
+        case Zone::hats:  label = &assets.labelUploadHat;   break;
+        case Zone::none:  break;
+    }
+
+    label->drawScaledAbout (g, { (float) DrumifyLayout::kitLabelCentreX,
+                                 (float) DrumifyLayout::kitLabelCentreY },
+                            DrumifyLayout::labelScale);
+}
+
+//==============================================================================
+SpeakerComponent::SpeakerComponent (const DrumifyAssets& a)
+    : assets (a)
+{
+    setMouseCursor (juce::MouseCursor::PointingHandCursor);
+}
+
+SpeakerComponent::Zone SpeakerComponent::zoneAt (juce::Point<float> p) const
+{
+    const auto frame = getLocalBounds().toFloat();
+
+    if (assets.speakerLeft.hitsContent (frame, p, DrumifyLayout::drumHoverTolerance))
+        return Zone::left;
+
+    if (assets.speakerRight.hitsContent (frame, p, DrumifyLayout::drumHoverTolerance))
+        return Zone::right;
+
+    return Zone::none;
+}
+
+bool SpeakerComponent::hitTest (int x, int y)
+{
+    return zoneAt ({ (float) x, (float) y }) != Zone::none;
+}
+
+void SpeakerComponent::setZone (Zone z)
+{
+    if (zone != z)
+    {
+        zone = z;
+        repaint();
+    }
+}
+
+void SpeakerComponent::mouseMove (const juce::MouseEvent& e) { setZone (zoneAt (e.position)); }
+void SpeakerComponent::mouseExit (const juce::MouseEvent&)   { setZone (Zone::none); }
+
+void SpeakerComponent::mouseUp (const juce::MouseEvent& e)
+{
+    const auto z = zoneAt (e.position);
+
+    if (e.mouseWasClicked() && z != Zone::none && onZoneClicked != nullptr)
+        onZoneClicked (z);
+}
+
+void SpeakerComponent::paint (juce::Graphics& g)
+{
+    const auto frame = getLocalBounds().toFloat();
+    const auto dimmed = zone == Zone::none ? 1.0f : 0.4f;
+
+    // Backdrop and the speaker that is not being pointed at both fade back, so
+    // the hovered one reads as picked out - same as the drum kit.
+    assets.speakerBg.drawFrame (g, frame, dimmed);
+    assets.speakerLeft.drawFrame  (g, frame, zone == Zone::right ? dimmed : 1.0f);
+    assets.speakerRight.drawFrame (g, frame, zone == Zone::left  ? dimmed : 1.0f);
+
+    const AssetLayer* label = &assets.labelPreviewAudio;
+
+    if (zone == Zone::left)
+        label = &assets.labelPreviewInput;
+    else if (zone == Zone::right)
+        label = &assets.labelPreviewOutput;
+
+    label->drawScaledAbout (g, { (float) DrumifyLayout::speakerLabelCentreX,
+                                 (float) DrumifyLayout::speakerLabelCentreY },
+                            DrumifyLayout::labelScale);
+}
+
+//==============================================================================
+
+SaveComponent::SaveComponent (const DrumifyAssets& a)
+    : assets (a)
+{
+    setMouseCursor (juce::MouseCursor::PointingHandCursor);
+}
+
+SaveComponent::Zone SaveComponent::zoneAt (juce::Point<float> p) const
+{
+    const auto frame = getLocalBounds().toFloat();
+
+    if (assets.saveKeyboard.hitsContent (frame, p, DrumifyLayout::drumHoverTolerance))
+        return Zone::left;
+
+    if (assets.saveLoop.hitsContent (frame, p, DrumifyLayout::drumHoverTolerance))
+        return Zone::right;
+
+    return Zone::none;
+}
+
+bool SaveComponent::hitTest (int x, int y)
+{
+    return zoneAt ({ (float) x, (float) y }) != Zone::none;
+}
+
+void SaveComponent::setZone (Zone z)
+{
+    if (zone != z)
+    {
+        zone = z;
+        repaint();
+    }
+}
+
+void SaveComponent::mouseMove (const juce::MouseEvent& e) { setZone (zoneAt (e.position)); }
+void SaveComponent::mouseExit (const juce::MouseEvent&)   { setZone (Zone::none); }
+
+void SaveComponent::mouseUp (const juce::MouseEvent& e)
+{
+    const auto z = zoneAt (e.position);
+
+    if (e.mouseWasClicked() && z != Zone::none && onZoneClicked != nullptr)
+        onZoneClicked (z);
+}
+
+void SaveComponent::paint (juce::Graphics& g)
+{
+    const auto frame = getLocalBounds().toFloat();
+    const auto dimmed = zone == Zone::none ? 1.0f : 0.4f;
+
+    // Backdrop and the button that is not being pointed at both fade back, so
+    // the hovered one reads as picked out - same as the drum kit.
+    assets.savePaint.drawFrame (g, frame, dimmed);
+    assets.saveKeyboard.drawFrame  (g, frame, zone == Zone::right ? dimmed : 1.0f);
+    assets.saveLoop.drawFrame (g, frame, zone == Zone::left ? dimmed : 1.0f);
+
+    const AssetLayer* label = &assets.labelSaveOutput;
+
+    if (zone == Zone::left)
+        label = &assets.labelSaveMidi;
+    else if (zone == Zone::right)
+        label = &assets.labelSaveAudio;
+
+    label->drawScaledAbout (g, { (float) DrumifyLayout::saveLabelCentreX,
+                                 (float) DrumifyLayout::saveLabelCentreY },
+                            DrumifyLayout::labelScale);
+}
+
+//==============================================================================
+MicrophoneComponent::MicrophoneComponent (const DrumifyAssets& a)
+    : assets (a)
+{
+    setMouseCursor (juce::MouseCursor::PointingHandCursor);
+}
+
+juce::Rectangle<float> MicrophoneComponent::getFrame() const
+{
+    // The mic artwork is a square frame anchored to the bottom of the component;
+    // the space above it holds the caption.
+    const auto side = (float) getWidth();
+    return { 0.0f, (float) getHeight() - side, side, side };
+}
+
+juce::Rectangle<float> MicrophoneComponent::getCapsule() const
+{
+    const auto frame = getFrame();
+    const auto& back = assets.capsuleBack;
+
+    if (! back.image.isValid() || back.content.isEmpty())
+        return frame;
+
+    const auto s = frame.getWidth() / (float) back.image.getWidth();
+
+    return { frame.getX() + (float) back.content.getX() * s,
+             frame.getY() + (float) back.content.getY() * s,
+             (float) back.content.getWidth()  * s,
+             (float) back.content.getHeight() * s };
+}
+
+float MicrophoneComponent::getSplitY() const
+{
+    const auto frame = getFrame();
+
+    if (! assets.topRing.image.isValid())
+        return getCapsule().getCentreY();
+
+    const auto s = frame.getWidth() / (float) assets.topRing.image.getWidth();
+
+    // The ring is where the two shells meet, so split there rather than at the
+    // capsule's midpoint.
+    const auto ringCentre = ((float) assets.topRing.content.getBottom()
+                             + (float) assets.bottomRing.content.getY()) * 0.5f;
+
+    return frame.getY() + ringCentre * s;
+}
+
+MicrophoneComponent::Zone MicrophoneComponent::zoneAt (juce::Point<float> p) const
+{
+    const auto capsule = getCapsule();
+
+    // Elliptical test, so the corners of the capsule's bounding box stay inert.
+    const auto c = capsule.getCentre();
+    const auto dx = (p.x - c.x) / (capsule.getWidth()  * 0.5f);
+    const auto dy = (p.y - c.y) / (capsule.getHeight() * 0.5f);
+
+    if (dx * dx + dy * dy > 1.0f)
+        return Zone::none;
+
+    return p.y < getSplitY() ? Zone::top : Zone::bottom;
+}
+
+bool MicrophoneComponent::hitTest (int x, int y)
+{
+    return zoneAt ({ (float) x, (float) y }) != Zone::none;
+}
+
+void MicrophoneComponent::setZone (Zone z)
+{
+    if (zone != z)
+    {
+        zone = z;
+        repaint();
+    }
+}
+
+void MicrophoneComponent::setRecording (bool shouldBeRecording)
+{
+    if (recording != shouldBeRecording)
+    {
+        recording = shouldBeRecording;
+        repaint();
+    }
+}
+
+void MicrophoneComponent::mouseMove (const juce::MouseEvent& e) { setZone (zoneAt (e.position)); }
+void MicrophoneComponent::mouseExit (const juce::MouseEvent&)   { setZone (Zone::none); }
+
+void MicrophoneComponent::mouseUp (const juce::MouseEvent& e)
+{
+    if (! e.mouseWasClicked())
+        return;
+
+    const auto z = zoneAt (e.position);
+
+    if (z == Zone::top && onRecordToggled != nullptr)
+        onRecordToggled();
+    else if (z == Zone::bottom && onUploadLoop != nullptr)
+        onUploadLoop();
+}
+
+void MicrophoneComponent::paint (juce::Graphics& g)
+{
+    const auto frame = getFrame();
+
+    // While armed the capsule stays open and switches to the recording artwork,
+    // so recording looks different from merely pointing at it.
+    const bool openTop = (zone == Zone::top) || recording;
+    const bool openBottom = (zone == Zone::bottom) && ! recording;
+
+    assets.handle.drawFrame (g, frame);
+    (recording ? assets.capsuleBackRecording : assets.capsuleBack).drawFrame (g, frame);
+
+    if (openTop)
+    {
+        // Top shell removed; the bottom shell keeps the ring.
+        (recording ? assets.bottomRecording : assets.bottomRing).drawFrame (g, frame);
+    }
+    else if (openBottom)
+    {
+        // Bottom shell removed; the top shell keeps the ring.
+        assets.topRing.drawFrame (g, frame);
+    }
+    else
+    {
+        assets.topNoRing.drawFrame (g, frame);
+        assets.bottomRing.drawFrame (g, frame);
+    }
+
+    // While armed the caption names the action if you are pointing at it, and
+    // reports the state otherwise.
+    const AssetLayer* label = &assets.labelInput;
+
+    if (recording)
+        label = (zone == Zone::top) ? &assets.labelStopRecording : &assets.labelRecording;
+    else if (zone == Zone::top)
+        label = &assets.labelRecord;
+    else if (zone == Zone::bottom)
+        label = &assets.labelUploadLoop;
+
+    label->drawScaledAbout (g, { (float) getWidth() * 0.5f,
+                                 ((float) getHeight() - frame.getHeight()) * 0.5f },
+                            DrumifyLayout::labelScale);
+}
+
+//==============================================================================
+/** The contents of the "?" popup. */
+class InfoPanel : public juce::Component
+{
+public:
+    InfoPanel()
+    {
+        body.setMultiLine (true);
+        body.setReadOnly (true);
+        body.setScrollbarsShown (true);
+        body.setCaretVisible (false);
+        body.setPopupMenuEnabled (false);
+        body.setFont (DrumifyTheme::mono (13.0f));
+        body.setColour (juce::TextEditor::backgroundColourId,     juce::Colours::transparentBlack);
+        body.setColour (juce::TextEditor::outlineColourId,        juce::Colours::transparentBlack);
+        body.setColour (juce::TextEditor::focusedOutlineColourId, juce::Colours::transparentBlack);
+        body.setColour (juce::TextEditor::textColourId,           DrumifyTheme::ink);
+        body.setText (infoPanelText, false);
+        addAndMakeVisible (body);
+
+        setSize (340, 250);
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        g.setColour (DrumifyTheme::ink);
+        g.setFont (DrumifyTheme::mono (18.0f, true));
+        g.drawText ("About Drumify", getLocalBounds().removeFromTop (30),
+                    juce::Justification::centredLeft);
+    }
+
+    void resized() override
+    {
+        auto area = getLocalBounds();
+        area.removeFromTop (34);
+        body.setBounds (area);
+    }
+
+private:
+    juce::TextEditor body;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (InfoPanel)
+};
+
+//==============================================================================
+/** The contents of the "+" popup. Add further options here. */
+class SettingsPanel : public juce::Component
+{
+public:
+    explicit SettingsPanel (HackBrownAudioProcessor& p)
+        : processor (p)
+    {
+        speedLabel.setText ("Playback speed", juce::dontSendNotification);
+        speedLabel.setFont (DrumifyTheme::mono (13.0f));
+        addAndMakeVisible (speedLabel);
+
+        speedSlider.setSliderStyle (juce::Slider::LinearHorizontal);
+        speedSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 58, 20);
+        speedSlider.setRange (0.25, 2.0, 0.01);
+        speedSlider.setValue (processor.playbackSpeed, juce::dontSendNotification);
+        speedSlider.onValueChange = [this] { processor.playbackSpeed = (float) speedSlider.getValue(); };
+        addAndMakeVisible (speedSlider);
+
+        previewButton.onClick = [this]
+        {
+            processor.inputProcessor.reset();
+            processor.isPlaybackOn.store (true);
+        };
+        addAndMakeVisible (previewButton);
+
+        stopButton.onClick = [this] { processor.isPlaybackOn.store (false); };
+        addAndMakeVisible (stopButton);
+
+        setSize (300, 220);
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        g.setColour (DrumifyTheme::ink);
+        g.setFont (DrumifyTheme::mono (18.0f, true));
+        g.drawText ("Settings", getLocalBounds().removeFromTop (30),
+                    juce::Justification::centredLeft);
+    }
+
+    void resized() override
+    {
+        auto area = getLocalBounds();
+        area.removeFromTop (36);
+
+        speedLabel.setBounds (area.removeFromTop (20));
+        speedSlider.setBounds (area.removeFromTop (28));
+        area.removeFromTop (14);
+
+        previewButton.setBounds (area.removeFromTop (44));
+        area.removeFromTop (4);
+        stopButton.setBounds (area.removeFromTop (44));
+    }
+
+private:
+    HackBrownAudioProcessor& processor;
+
+    juce::Label      speedLabel;
+    juce::Slider     speedSlider;
+    juce::TextButton previewButton { "Preview Audio" };
+    juce::TextButton stopButton    { "Stop Playback" };
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SettingsPanel)
+};
 
 //==============================================================================
 HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProcessor& p)
     : AudioProcessorEditor (&p), audioProcessor (p)
 {
-    background = juce::ImageCache::getFromMemory (BinaryData::morning_png,
-                                             BinaryData::morning_pngSize);
-    
-    
-    // Add label (optional)
-    //addAndMakeVisible(myLabel);
-    myLabel.setText("Volume", juce::dontSendNotification);
-    myLabel.attachToComponent(&mySlider, false);  // Attach above slider
-    
-    recordButton.setClickingTogglesState(true);
-    recordButton.setToggleState(false, juce::dontSendNotification);
-    
-    
-    recordButton.onClick = [&]() {
-        bool isOn = recordButton.getToggleState();
-        auto message = "Recording!";
-        if (!recordButton.getToggleState()) {
-            message = "Record";
-        }
-        //const auto message =  ? "Recording!" : "Record";
-        recordButton.setButtonText(message);
-        
-        if (!isOn && p.recordingStarted.load()) {
-            p.reconstructLoopFromHits();
+    setLookAndFeel (&drumifyLookAndFeel);
 
-            //recordButton.setButtonText("Recorded Thing");
-            addAndMakeVisible(playButton);
-        }
-        
-        p.recordingEnabled.store(isOn);
-    };
-    
-    playButton.onClick = [&]() {
-        p.inputProcessor.reset();
-        
-        std::cout << p.inputProcessor.storedHitsIndex << std::endl;
-        //p.inputProcessor.storedHits;
-        //p.renderedTestBuffer = p.inputProcessor.hitsToBuffer();
-        p.isPlaybackOn.store(true);
-      /*  saveOutput(p.renderedTestBuffer);*/
-    };
-    
-    loopReplaceButton.onClick = [&]() {
-        fileOpener([this] (const juce::File& file)
+    drumKit.onZoneClicked = [this] (DrumKitComponent::Zone z)
+    {
+        switch (z)
         {
-            std::cout << "starting the\n";
-            //audioProcessor.processUploadedLoop(file);
-            if (true) {
-                juce::File snaresDir ("/Users/lightspark/Documents/JuceProjects/HackBrown2026/Data/Snares");
-
-                // Defensive check: Ensure the folder actually exists on your disk
-                if (snaresDir.isDirectory())
-                {
-                    for (const auto& entry : juce::RangedDirectoryIterator (snaresDir, true, "*.wav", juce::File::findFiles))
-                    {
-                        juce::File newFile = entry.getFile();
-                        
-                        // Process each file one by one
-                        audioProcessor.processUploadedLoop (newFile);
-                    }
-                    
-                    DBG ("Finished processing all files in the directory.");
-                }
-                else
-                {
-                    DBG ("Error: The directory '/Data/Snares' was not found!");
-                }
-            }
-        });
-        
-        if (p.inputProcessor.csvFile.is_open())
-        {
-            // 4. Access using HitClassifier::
-            p.inputProcessor.csvFile << "means: "
-                    << std::fixed << std::setprecision(4) << ","
-                    << HitClassifier::totalFeatures.meanCentroid << ","
-                    << HitClassifier::totalFeatures.centroidDelta << ","
-                    << HitClassifier::totalFeatures.topEndHeavyRatio << ","
-                    << HitClassifier::totalFeatures.lowEndHeavyRatio << ","
-                    << HitClassifier::totalFeatures.decayRatio << std::endl;
+            case DrumKitComponent::Zone::kick:  loadDrumSample (DrumType::kick);  break;
+            case DrumKitComponent::Zone::snare: loadDrumSample (DrumType::snare); break;
+            case DrumKitComponent::Zone::hats:  loadDrumSample (DrumType::hat);   break;
+            case DrumKitComponent::Zone::none:  break;
         }
-            
-        addAndMakeVisible(playButton);
     };
 
-    kickButton.onClick = [&]() {
-        fileOpener([this] (const juce::File& file)
-        {
-            int midiNote = audioProcessor.drumMidiMap[DrumType::kick];
-            audioProcessor.loadSampleFromFile(file, midiNote);
-        });
-        
-        audioProcessor.getLongestSampleLengthInSamples();
+    microphone.onRecordToggled = [this] { toggleRecording(); };
+    microphone.onUploadLoop    = [this] { loadDrumLoopFromDisk(); };
+
+    speakers.onZoneClicked = [this] (SpeakerComponent::Zone z)
+    {
+        audioProcessor.startPreview (z == SpeakerComponent::Zone::left ? PreviewSource::input
+                                                                      : PreviewSource::output);
     };
     
-    snareButton.onClick = [&]() {
-        fileOpener([this] (const juce::File& file)
-        {
-            int midiNote = audioProcessor.drumMidiMap[DrumType::snare];
-            audioProcessor.loadSampleFromFile(file, midiNote);
-        });
-        
-        audioProcessor.getLongestSampleLengthInSamples();
+    saveButtons.onZoneClicked = [this] (SaveComponent::Zone z) {
+        z == SaveComponent::Zone::left ? saveMidiToDisk() : saveAudioToDisk();
     };
-    
-    hatButton.onClick = [&]() {
-        fileOpener([this] (const juce::File& file)
-        {
-            int midiNote = audioProcessor.drumMidiMap[DrumType::hat];
-            audioProcessor.loadSampleFromFile(file, midiNote);
-        });
-        
-        audioProcessor.getLongestSampleLengthInSamples();
-    };
-    
-    // File reader init
+
+    updateButton.onClick   = [this] { audioProcessor.reconstructLoopFromHits(); };
+    plusButton.onClick     = [this] { showSettingsPopup(); };
+    questionButton.onClick = [this] { showInfoPopup(); };
+
     formatManager.registerBasicFormats();
-    //transportSource.addChangeListener (this);
-    
-    // Make sure that before the constructor has finished, you've set the
-    // editor's size to whatever you need it to be.
-    addAndMakeVisible(recordButton);
-    addAndMakeVisible(loopReplaceButton);
-    addAndMakeVisible(kickButton);
-    addAndMakeVisible(snareButton);
-    addAndMakeVisible(hatButton);
-    setSize (400, 300);
+
+    addAndMakeVisible (drumKit);
+    addAndMakeVisible (speakers);
+    addAndMakeVisible (microphone);
+    addAndMakeVisible (updateButton);
+    addAndMakeVisible (plusButton);
+    addAndMakeVisible (questionButton);
+    addAndMakeVisible (saveButtons);
+
+    setSize (DrumifyLayout::canvasWidth, DrumifyLayout::canvasHeight);
 }
 
 HackBrownAudioProcessorEditor::~HackBrownAudioProcessorEditor()
 {
+    setLookAndFeel (nullptr);
 }
 
 //==============================================================================
 void HackBrownAudioProcessorEditor::paint (juce::Graphics& g)
 {
-    // (Our component is opaque, so we must completely fill the background with a solid colour)
-    
-    if (background.isValid())
-    {
-        g.drawImageWithin (background,
-                           0, 0, getWidth(), getHeight(),
-                           juce::RectanglePlacement::fillDestination);
-        
-        g.setColour (juce::Colours::black.withAlpha (0.35f));
-        
-        g.setColour (juce::Colours::white.withAlpha (0.12f));
-        
-        // subtle top highlight line
-        g.setColour (juce::Colours::white.withAlpha (0.10f));
-        g.setColour (juce::Colours::white.withAlpha(0.9f));
-        juce::Font font ("Calibri", 50.0f, juce::Font::bold);
-        g.setFont (font);
-        //g.drawFittedText ("DRUMIFY", getLocalBounds(), juce::Justification::centred, 1);
-    }
-    
+    assets.background.drawFrame (g, getLocalBounds().toFloat());
+
+    assets.title.drawContent (g, juce::Rectangle<float> ((float) DrumifyLayout::titleX,
+                                                         (float) DrumifyLayout::titleY,
+                                                         (float) DrumifyLayout::titleW,
+                                                         (float) DrumifyLayout::titleH));
+
     if (isDragging)
     {
-        // Draw a highlighting overlay when dragging a file over the UI
-        g.setColour (juce::Colours::orange.withAlpha (0.2f));
+        g.setColour (DrumifyTheme::recordAccent.withAlpha (0.14f));
         g.fillAll();
 
-        g.setColour (juce::Colours::orange);
-        g.drawRect (getLocalBounds(), 3); // 3-pixel border
-        
-        g.setFont (18.0f);
+        g.setColour (DrumifyTheme::recordAccent);
+        g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (6.0f), 14.0f, 3.0f);
+
+        g.setFont (DrumifyTheme::mono (22.0f, true));
+        g.setColour (DrumifyTheme::ink);
         g.drawText ("Drop your audio loop here", getLocalBounds(), juce::Justification::centred);
     }
-    /*
-    if (isHovering)
-    {
-        g.setColour (juce::Colours::lightgreen);
-        g.drawRect (getLocalBounds(), 3); // Draw a thick border
-        g.drawText ("Drop it here!", getLocalBounds(), juce::Justification::centred);
-    }
-    else
-    {
-        g.drawText ("Drag an audio file here", getLocalBounds(), juce::Justification::centred);
-    }*/
 }
 
 void HackBrownAudioProcessorEditor::resized()
 {
-    // This is generally where you'll want to lay out the positions of any
-    // subcomponents in your editor..
-    int windowWidth = 1000;
-    int windowHeight = 700;
-    
-    setSize(1000, 700);
-    
-    int buttonWidth = 170;
-    
-    recordButton.setBounds(20, 20, buttonWidth, 40);
-    playButton.setBounds(20, 80, buttonWidth, 40);
-    mySlider.setBounds(200, 50, 100, 200);
-    loopReplaceButton.setBounds((windowWidth - buttonWidth) / 2, 200, buttonWidth, 70);
-    
-    int importSoundXOffset = 100;
-    int importSoundHeight = 70;
-    
-    kickButton.setBounds(importSoundXOffset, 320, buttonWidth, importSoundHeight);
-    snareButton.setBounds(importSoundXOffset, 420, buttonWidth, importSoundHeight);
-    hatButton.setBounds(importSoundXOffset, 520, buttonWidth, importSoundHeight);
+    using namespace DrumifyLayout;
+
+    // The drum layers are canvas-aligned, so this covers the whole editor and
+    // relies on per-pixel hit testing to stay out of everything else's way.
+    drumKit.setBounds (getLocalBounds());
+    speakers.setBounds (getLocalBounds());
+    saveButtons.setBounds (getLocalBounds());
+
+    microphone.setBounds (micCentreX - micFrameSize / 2, micTop,
+                          micFrameSize, canvasHeight - micTop);
+
+    // The three icons sit in a right-aligned row, each keeping its own aspect.
+    const std::pair<AssetButton*, const AssetLayer*> icons[]
+    {
+        { &updateButton,   &assets.menuUpdate },
+        { &plusButton,     &assets.menuPlus },
+        { &questionButton, &assets.menuQuestion }
+    };
+
+    constexpr int padding = 6;   // room for the hover enlargement
+
+    std::array<int, 3> widths {};
+    int total = menuGap * 2;
+
+    for (size_t i = 0; i < widths.size(); ++i)
+    {
+        const auto& c = icons[i].second->content;
+
+        widths[i] = c.isEmpty() ? menuIconHeight
+                                : juce::roundToInt ((float) menuIconHeight
+                                                      * (float) c.getWidth() / (float) c.getHeight());
+        total += widths[i];
+    }
+
+    int x = menuRight - total;
+
+    for (size_t i = 0; i < widths.size(); ++i)
+    {
+        icons[i].first->setBounds (x - padding, menuCentreY - menuIconHeight / 2 - padding,
+                                   widths[i] + padding * 2, menuIconHeight + padding * 2);
+        x += widths[i] + menuGap;
+    }
 }
 
-// 1. Tell the OS if you are interested in the files being dragged
+//==============================================================================
+void HackBrownAudioProcessorEditor::toggleRecording()
+{
+    const bool wasRecording = microphone.isRecording();
+    const bool nowRecording = ! wasRecording;
+
+    if (! nowRecording && audioProcessor.recordingStarted.load())
+        audioProcessor.reconstructLoopFromHits();
+
+    audioProcessor.recordingEnabled.store (nowRecording);
+    microphone.setRecording (nowRecording);
+}
+
+void HackBrownAudioProcessorEditor::loadDrumSample (DrumType drum)
+{
+    fileOpener ([this, drum] (const juce::File& file)
+    {
+        audioProcessor.loadSampleFromFile (file, audioProcessor.drumMidiMap[drum]);
+    });
+
+    audioProcessor.getLongestSampleLengthInSamples();
+}
+
+void HackBrownAudioProcessorEditor::showInfoPopup()
+{
+    juce::CallOutBox::launchAsynchronously (std::make_unique<InfoPanel>(),
+                                            questionButton.getBounds(), this);
+}
+
+void HackBrownAudioProcessorEditor::showSettingsPopup()
+{
+    juce::CallOutBox::launchAsynchronously (std::make_unique<SettingsPanel> (audioProcessor),
+                                            plusButton.getBounds(), this);
+}
+
+void HackBrownAudioProcessorEditor::loadDrumLoopFromDisk()
+{
+    fileOpener ([this] (const juce::File& file)
+    {
+        audioProcessor.processUploadedLoop (file);
+    });
+
+    if (audioProcessor.inputProcessor.csvFile.is_open())
+    {
+        audioProcessor.inputProcessor.csvFile << "means: "
+                << std::fixed << std::setprecision(4) << ","
+                << HitClassifier::totalFeatures.meanCentroid << ","
+                << HitClassifier::totalFeatures.centroidDelta << ","
+                << HitClassifier::totalFeatures.topEndHeavyRatio << ","
+                << HitClassifier::totalFeatures.lowEndHeavyRatio << ","
+                << HitClassifier::totalFeatures.decayRatio << std::endl;
+    }
+}
+
+/** Both exports lay the loop out the same way playAudio does, so the .mid and
+    the .wav line up: onsets scaled by the playback speed, shifted so the first
+    hit lands at zero.
+*/
+static constexpr int midiTicksPerQuarterNote = 960;
+static constexpr int midiMicrosecondsPerQuarter = 500000;   // 120 BPM
+static constexpr int generalMidiDrumChannel = 10;
+
+void HackBrownAudioProcessorEditor::saveMidiToDisk()
+{
+    const auto& hits = audioProcessor.inputProcessor.classifiedHits;
+
+    if (hits.empty())
+    {
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                                                "Nothing to save",
+                                                "Record a rhythm or upload a loop first - there are no drum hits yet.");
+        return;
+    }
+
+    folderChooser ("Choose a folder to save the MIDI into...", [this] (const juce::File& folder)
+    {
+        const auto& hits = audioProcessor.inputProcessor.classifiedHits;
+
+        if (hits.empty())
+            return;
+
+        const auto sampleRate = audioProcessor.getSampleRate() > 0.0 ? audioProcessor.getSampleRate() : 44100.0;
+        const auto speed = (double) audioProcessor.playbackSpeed;
+        const auto firstOnset = (double) hits.front().onsetSample * speed;
+
+        auto loudest = 0.0f;
+
+        for (const auto& hit : hits)
+            loudest = juce::jmax (loudest, hit.rms);
+
+        juce::MidiMessageSequence track;
+        track.addEvent (juce::MidiMessage::tempoMetaEvent (midiMicrosecondsPerQuarter));
+
+        const auto secondsToTicks = [] (double seconds)
+        {
+            return seconds * 1.0e6 / (double) midiMicrosecondsPerQuarter * (double) midiTicksPerQuarterNote;
+        };
+
+        for (const auto& hit : hits)
+        {
+            const auto startSeconds = ((double) hit.onsetSample * speed - firstOnset) / sampleRate;
+            const auto lengthSeconds = juce::jmax (0.05, (double) hit.durationSec);
+
+            const auto velocity = loudest > 0.0f ? juce::jlimit (0.2f, 1.0f, hit.rms / loudest) : 0.8f;
+
+            // HitType's values are the General MIDI drum note numbers already.
+            const auto note = (int) hit.type;
+
+            track.addEvent (juce::MidiMessage::noteOn (generalMidiDrumChannel, note, velocity),
+                            secondsToTicks (startSeconds));
+            track.addEvent (juce::MidiMessage::noteOff (generalMidiDrumChannel, note),
+                            secondsToTicks (startSeconds + lengthSeconds));
+        }
+
+        track.updateMatchedPairs();
+
+        juce::MidiFile midiFile;
+        midiFile.setTicksPerQuarterNote (midiTicksPerQuarterNote);
+        midiFile.addTrack (track);
+
+        const auto destination = folder.getChildFile ("Drumify Loop.mid").getNonexistentSibling();
+
+        juce::FileOutputStream stream (destination);
+
+        if (! stream.openedOk() || ! midiFile.writeTo (stream))
+        {
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                                                    "Could not save",
+                                                    "Writing to " + destination.getFullPathName() + " failed.");
+            return;
+        }
+
+        stream.flush();
+
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon,
+                                                "MIDI saved",
+                                                "Saved " + juce::String (hits.size()) + " hits to "
+                                                  + destination.getFullPathName());
+    });
+}
+
+void HackBrownAudioProcessorEditor::saveAudioToDisk()
+{
+    if (audioProcessor.getRenderedLoop().getNumSamples() == 0)
+    {
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                                                "Nothing to save",
+                                                "Record a rhythm or upload a loop first - no audio has been generated yet.");
+        return;
+    }
+
+    folderChooser ("Choose a folder to save the audio into...", [this] (const juce::File& folder)
+    {
+        const auto& loop = audioProcessor.getRenderedLoop();
+
+        if (loop.getNumSamples() == 0 || loop.getNumChannels() == 0)
+            return;
+
+        const auto sampleRate = audioProcessor.getSampleRate() > 0.0 ? audioProcessor.getSampleRate() : 44100.0;
+        const auto destination = folder.getChildFile ("Drumify Loop.wav").getNonexistentSibling();
+
+        auto fileStream = std::make_unique<juce::FileOutputStream> (destination);
+
+        if (! fileStream->openedOk())
+        {
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                                                    "Could not save",
+                                                    "Could not open " + destination.getFullPathName() + " for writing.");
+            return;
+        }
+
+        // createWriterFor takes a unique_ptr<OutputStream>&, so hand it the base type.
+        std::unique_ptr<juce::OutputStream> stream = std::move (fileStream);
+
+        juce::WavAudioFormat wavFormat;
+
+        // This overload takes the stream by reference and only moves out of it on
+        // success, so a failure here leaves the stream to clean itself up.
+        auto writer = wavFormat.createWriterFor (stream, juce::AudioFormatWriterOptions {}
+                                                            .withSampleRate (sampleRate)
+                                                            .withNumChannels (loop.getNumChannels())
+                                                            .withBitsPerSample (24));
+
+        if (writer == nullptr)
+        {
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                                                    "Could not save",
+                                                    "Could not create a WAV writer for " + destination.getFullPathName());
+            return;
+        }
+
+        const bool wroteOk = writer->writeFromAudioSampleBuffer (loop, 0, loop.getNumSamples());
+        writer.reset();   // flushes and closes before we report success
+
+        if (! wroteOk)
+        {
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                                                    "Could not save",
+                                                    "Writing to " + destination.getFullPathName() + " failed.");
+            return;
+        }
+
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon,
+                                                "Audio saved",
+                                                "Saved " + juce::String (loop.getNumSamples() / sampleRate, 2)
+                                                  + "s to " + destination.getFullPathName());
+    });
+}
+
+void HackBrownAudioProcessorEditor::folderChooser (const juce::String& title,
+                                                   std::function<void (const juce::File&)> folderAction)
+{
+    chooser = std::make_unique<juce::FileChooser> (title,
+                                                   juce::File::getSpecialLocation (juce::File::userMusicDirectory));
+
+    auto chooserFlags = juce::FileBrowserComponent::openMode
+                          | juce::FileBrowserComponent::canSelectDirectories;
+
+    chooser->launchAsync (chooserFlags, [folderAction] (const juce::FileChooser& fc)
+    {
+        const auto folder = fc.getResult();
+
+        if (folder != juce::File {} && folder.isDirectory())
+            folderAction (folder);
+    });
+}
+
+//==============================================================================
 bool HackBrownAudioProcessorEditor::isInterestedInFileDrag (const juce::StringArray& files)
 {
     if (files.isEmpty())
         return false;
 
-    // Optional: Only accept audio files
     juce::File file (files[0]);
     juce::String ext = file.getFileExtension().toLowerCase();
     return (ext == ".wav" || ext == ".mp3" || ext == ".aiff" || ext == ".aif" || ext == ".flac");
 }
 
-// 2. This triggers when the user releases the mouse and drops the file
-void HackBrownAudioProcessorEditor::filesDropped (const juce::StringArray& files, int x, int y)
+void HackBrownAudioProcessorEditor::filesDropped (const juce::StringArray& files, int, int)
 {
     isDragging = false;
     repaint();
@@ -261,78 +1197,26 @@ void HackBrownAudioProcessorEditor::filesDropped (const juce::StringArray& files
     if (files.isEmpty())
         return;
 
-    // Grab the first file in the array of dropped items
-    juce::File file (files[0]);
-    
-    // Run your existing processing and show the play button
-    audioProcessor.processUploadedLoop(file);
-    addAndMakeVisible(playButton);
+    audioProcessor.processUploadedLoop (juce::File (files[0]));
 }
 
-// 3. (Optional) Provide visual feedback when the file enters the UI area
-void HackBrownAudioProcessorEditor::fileDragEnter (const juce::StringArray& files, int x, int y)
+void HackBrownAudioProcessorEditor::fileDragEnter (const juce::StringArray&, int, int)
 {
     isDragging = true;
-    repaint(); // Forces paint() to run, allowing you to draw a "Drop Here" overlay
+    repaint();
 }
 
-// 4. (Optional) Reset visual feedback if the user drags the file away
-void HackBrownAudioProcessorEditor::fileDragExit (const juce::StringArray& files)
+void HackBrownAudioProcessorEditor::fileDragExit (const juce::StringArray&)
 {
     isDragging = false;
     repaint();
 }
 
-/*
-bool HackBrownAudioProcessorEditor::isInterestedInFileDrag (const juce::StringArray& files)
-{
-    for (auto file : files)
-    {
-        if (file.endsWith(".wav") || file.endsWith(".mp3") || file.endsWith(".aif"))
-            return true;
-    }
-    return false;
-}
-
-void HackBrownAudioProcessorEditor::fileDragEnter (const juce::StringArray& files, int x, int y)
-{
-    if ((x > 100 && x < 200) & (y > 500 && y < 600)) {
-        isHovering = true;
-        repaint();
-    }
-}
-
-void HackBrownAudioProcessorEditor::fileDragExit (const juce::StringArray& files)
-{
-    isHovering = false;
-    repaint();
-}
-
-void HackBrownAudioProcessorEditor::fileDragMove (const juce::StringArray& files, int x, int y)
-{
-    // You can use x and y to see *where* they are hovering if you have a specific drop-zone
-}
-
-void HackBrownAudioProcessorEditor::filesDropped (const juce::StringArray& files, int x, int y)
-{
-    isHovering = false;
-    repaint();
-
-    // Grab the first file from the array
-    juce::File file (files[0]);
-    DBG("file dropped");
-    
-    // Pass it to your processor (make sure to implement this method in your Processor!)
-    //audioProcessor.loadDroppedFile (file);
-}
-*/
-
 void HackBrownAudioProcessorEditor::fileOpener (std::function<void (const juce::File&)> fileAction)
 {
     chooser = std::make_unique<juce::FileChooser> ("Select a Wav or mp3 file to use...", juce::File {}, "*.wav;*.mp3;*.aif;*.aiff;*.flac");
     auto chooserFlags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
-    
-    // Capture the callback function by value
+
     chooser->launchAsync (chooserFlags, [this, fileAction] (const juce::FileChooser& fc)
     {
         auto file = fc.getResult();
@@ -340,8 +1224,7 @@ void HackBrownAudioProcessorEditor::fileOpener (std::function<void (const juce::
         if (file != juce::File {})
         {
             DBG ("file chosen");
-            // Run the custom code that was passed into fileOpener
-            fileAction(file);
+            fileAction (file);
         }
     });
 }

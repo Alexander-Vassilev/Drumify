@@ -18,6 +18,12 @@ enum DrumType {
     hat
 };
 
+/** Which audio the preview speakers play back. */
+enum class PreviewSource {
+    input,   // the hits captured from the mic
+    output   // the reconstructed drum loop
+};
+
 //==============================================================================
 /**
 */
@@ -69,7 +75,13 @@ public:
     
     void reconstructLoopFromHits();
     void getLongestSampleLengthInSamples();
-    
+
+    /** Starts playback of either the captured input or the rendered drum loop. */
+    void startPreview (PreviewSource source);
+
+    /** The reconstructed drum loop, as built by reconstructLoopFromHits(). */
+    const juce::AudioBuffer<float>& getRenderedLoop() const noexcept { return renderedDrumBuffer; }
+
     std::atomic<bool> recordingEnabled { false };
     std::atomic<bool> recordingStarted { false };
     std::atomic<bool> isPlaybackOn { false };
@@ -138,6 +150,8 @@ private:
     
     // Rendered playback state
     juce::AudioBuffer<float> renderedDrumBuffer;
+    juce::AudioBuffer<float> inputPreviewBuffer;   // the captured hits, laid end to end
+    std::atomic<bool> previewingInput { false };
     int renderedReadPos = 0;
     bool isPlayingRendered = false;
     
