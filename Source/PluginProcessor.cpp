@@ -146,13 +146,15 @@ void HackBrownAudioProcessor::loadSampleFromReader (std::unique_ptr<juce::AudioF
     const double attack = 0.001;
     const double release = 0.05;
 
-    auto* sound = new juce::SamplerSound (sampleName,
-                                          *reader,
-                                          noteRange,
-                                          midiNote,
-                                          attack,
-                                          release,
-                                          10.0);
+    DrumSamplerSound::Ptr sound = new DrumSamplerSound (sampleName,
+                                                        *reader,
+                                                        noteRange,
+                                                        midiNote,
+                                                        attack,
+                                                        release,
+                                                        10.0);
+
+    DBG("Midi note when loading: " << midiNote);
 
     // Clear old sounds assigned to this midiNote so they don't stack up
     for (int i = drumSynth.getNumSounds() - 1; i >= 0; --i)
@@ -164,7 +166,18 @@ void HackBrownAudioProcessor::loadSampleFromReader (std::unique_ptr<juce::AudioF
         }
     }
 
-    drumSynth.addSound (sound);
+    drumSynth.addSound (sound.get());
+
+    // addSound appends, so the synth's ordering no longer matches the drums.
+    // This map is what the renderer reads instead.
+    drumSoundsByNote[midiNote] = sound;
+}
+
+DrumSamplerSound::Ptr HackBrownAudioProcessor::getSoundForNote (int midiNote) const
+{
+    const auto found = drumSoundsByNote.find (midiNote);
+
+    return found != drumSoundsByNote.end() ? found->second : nullptr;
 }
 
 std::unique_ptr<juce::AudioFormatReader> HackBrownAudioProcessor::createReaderForFile (const juce::File& file)
@@ -333,15 +346,25 @@ void HackBrownAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlo
         drumSynth.addVoice(new juce::SamplerVoice());
 
     drumSynth.setCurrentPlaybackSampleRate(sampleRate);
-    drumSynth.clearSounds();
-    
+
     drumMidiMap[kick]  = 36;
     drumMidiMap[snare] = 38;
     drumMidiMap[hat]   = 42;
 
-    loadSampleFromBinaryData("Kick", BinaryData::Kick_wav, BinaryData::Kick_wavSize, drumMidiMap[kick]);
-    loadSampleFromBinaryData("Snare", BinaryData::Snare_wav, BinaryData::Snare_wavSize, drumMidiMap[snare]);
-    loadSampleFromBinaryData("Hat", BinaryData::Hat_wav, BinaryData::Hat_wavSize, drumMidiMap[hat]);
+    // Sounds deliberately survive prepareToPlay. A host calls it again whenever
+    // the sample rate or block size changes, and clearing here would silently
+    // throw away samples the user had loaded. SamplerVoice resamples against the
+    // rate set above, so sounds loaded at the old rate stay valid; only the
+    // slots that are still empty need the built-in defaults.
+    if (getSoundForNote (drumMidiMap[kick]) == nullptr)
+        loadSampleFromBinaryData("Kick", BinaryData::Kick_wav, BinaryData::Kick_wavSize, drumMidiMap[kick]);
+
+    if (getSoundForNote (drumMidiMap[snare]) == nullptr)
+        loadSampleFromBinaryData("Snare", BinaryData::Snare_wav, BinaryData::Snare_wavSize, drumMidiMap[snare]);
+
+    if (getSoundForNote (drumMidiMap[hat]) == nullptr)
+        loadSampleFromBinaryData("Hat", BinaryData::Hat_wav, BinaryData::Hat_wavSize, drumMidiMap[hat]);
+
     getLongestSampleLengthInSamples();
     
     currentSampleRate = sampleRate;
@@ -391,29 +414,6 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
     out.setSize(2, outputNumSamples);
     out.clear();
 
-    juce::SynthesiserSound::Ptr kick = drumSynth.getSound(0);
-    //DBG("a");
-    auto* samplerSound = dynamic_cast<juce::SamplerSound*>(kick.get());
-    //DBG("b");
-    juce::AudioBuffer<float>* kickData = samplerSound->getAudioData();
-    //DBG("c");
-    int kickLen = kickData->getNumSamples();
-
-    //DBG("built ma kick with a length of: " << kickLen);
-    
-    
-
-    juce::SynthesiserSound::Ptr snare = drumSynth.getSound(1);
-    samplerSound = dynamic_cast<juce::SamplerSound*>(snare.get());
-    juce::AudioBuffer<float>* snareData = samplerSound->getAudioData();
-    int snareLen = snareData->getNumSamples();
-
-    //DBG("built ma snare");
-
-    juce::SynthesiserSound::Ptr hat = drumSynth.getSound(2);
-    samplerSound = dynamic_cast<juce::SamplerSound*>(hat.get());
-    juce::AudioBuffer<float>* hatData = samplerSound->getAudioData();
-    int hatLen = hatData->getNumSamples();
     int offset = 0;
 
     if (events.size() >= 1) {
@@ -422,24 +422,20 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
     
     for (int i = 0; i < events.size(); i++) {
         //DBG("num events" << events.size());
-        juce::AudioBuffer<float> copier;
         bool skipFilter = true;
 
-        switch (events[i].midiNote) {
-        case 36:
-            copier = *kickData;
-            break;
-        case 38:
-            copier = *snareData;
-            break;
-        case 42:
-            copier = *hatData;
-            break;
-        default:
-            copier = *hatData;
-            //skip = true;
-            break;
-        };
+        // Look the drum up by its note. Unclassified hits fall back to the hat,
+        // as they did when this switched on the note directly.
+        auto sound = getSoundForNote (events[i].midiNote);
+
+        if (sound == nullptr)
+            sound = getSoundForNote (drumMidiMap[hat]);
+
+        if (sound == nullptr || sound->getAudioData() == nullptr)
+            continue;
+
+        juce::AudioBuffer<float> copier = *sound->getAudioData();
+        copier.applyGainRamp(0, 0, copier.getNumSamples(), events[i].velocity01, events[i].velocity01);
 
         if (!skipFilter) {
             if (events[i].filterOn) {
@@ -451,9 +447,27 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
         }
         //DBG("attempting copy");
         //DBG("start sample: " << events[i].sampleIndex * playbackSpeed - offset);
-        out.copyFrom(0, events[i].sampleIndex * playbackSpeed - offset, copier, 0, 0, copier.getNumSamples());
+        const int startSample = (int) (events[i].sampleIndex * playbackSpeed) - offset;
+
+        // outputNumSamples is derived from unscaled onsets, so a playbackSpeed
+        // above 1 can push a hit past the end of the buffer. Clamp the copy
+        // rather than running off it.
+        const int numToCopy = juce::jmin (copier.getNumSamples(), outputNumSamples - startSample);
+
+        if (startSample < 0 || numToCopy <= 0)
+            continue;
+
+        auto writePtr = out.getWritePointer(0);
+        auto readPtr = copier.getReadPointer(0);
+        
+        for (int i = 0; i < numToCopy; i++) {
+            writePtr[startSample + i] += readPtr[i];
+        }
+        
+        //out.copyFrom(0, startSample, copier, 0, 0, numToCopy);
         //DBG("applying gain ramp");
-        out.applyGainRamp(0, events[i].sampleIndex * playbackSpeed - offset, copier.getNumSamples(), events[i].velocity01, events[i].velocity01);
+        
+        //out.applyGainRamp(0, startSample, numToCopy, events[i].velocity01, events[i].velocity01);
         //DBG("copied");
     }
 
@@ -698,6 +712,7 @@ void HackBrownAudioProcessor::buildDrumBuffer() {
     for (auto processedHit : inputProcessor.classifiedHits) {
         lastSampleHit = processedHit.onsetSample;
         lastSize = processedHit.durationSec;
+        DBG("while adding processed hits, this is type: " << (int)processedHit.type);
         events.push_back({ processedHit.onsetSample, (int)processedHit.type, processedHit.rms }); // kick at 0s
     }
     

@@ -18,6 +18,37 @@ enum DrumType {
     hat
 };
 
+/** A SamplerSound that remembers the drum note it was loaded for.
+
+    juce::SamplerSound keeps its root note private and the Synthesiser only
+    exposes sounds by position, which reshuffles every time a sample is replaced
+    (removeSound then addSound appends to the end). Tagging each sound lets the
+    offline renderer look a drum up directly instead of trusting that order.
+*/
+class DrumSamplerSound : public juce::SamplerSound
+{
+public:
+    DrumSamplerSound (const juce::String& name,
+                      juce::AudioFormatReader& source,
+                      const juce::BigInteger& midiNotes,
+                      int midiNoteForNormalPitch,
+                      double attackTimeSecs,
+                      double releaseTimeSecs,
+                      double maxSampleLengthSeconds)
+        : juce::SamplerSound (name, source, midiNotes, midiNoteForNormalPitch,
+                              attackTimeSecs, releaseTimeSecs, maxSampleLengthSeconds),
+          midiNote (midiNoteForNormalPitch)
+    {
+    }
+
+    int getMidiNote() const noexcept { return midiNote; }
+
+    using Ptr = juce::ReferenceCountedObjectPtr<DrumSamplerSound>;
+
+private:
+    const int midiNote;
+};
+
 /** Which audio the preview speakers play back. */
 enum class PreviewSource {
     input,   // the hits captured from the mic
@@ -69,6 +100,9 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
     
+    /** The sound currently loaded for a drum note, or nullptr if there is none. */
+    DrumSamplerSound::Ptr getSoundForNote (int midiNote) const;
+
     void loadSampleFromFile (const juce::File& file, int midiNote);
     std::unique_ptr<juce::AudioFormatReader> createReaderForFile (const juce::File& file);
     void processUploadedLoop(const juce::File& file);
@@ -102,6 +136,13 @@ private:
     double currentSampleRate = 44100.0;
 
     juce::Synthesiser drumSynth;
+
+    /** The sounds in drumSynth, keyed by their note, so the renderer can pick a
+        drum in constant time regardless of the order they sit in the synth.
+        Kept in step with drumSynth by loadSampleFromReader and prepareToPlay.
+    */
+    std::map<int, DrumSamplerSound::Ptr> drumSoundsByNote;
+
     int numSamplesLongestSound = 0; // Length of longest drumSynth sound in samples
     juce::AudioFormatManager formatManager;
     
