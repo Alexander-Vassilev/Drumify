@@ -1025,7 +1025,7 @@ void HackBrownAudioProcessorEditor::saveMidiToDisk()
         return;
     }
 
-    folderChooser ("Choose a folder to save the MIDI into...", [this] (const juce::File& folder)
+    fileSaver ("Save MIDI as...", "Drumify Loop.mid", ".mid", [this] (const juce::File& destination)
     {
         const auto& hits = audioProcessor.inputProcessor.classifiedHits;
 
@@ -1071,7 +1071,9 @@ void HackBrownAudioProcessorEditor::saveMidiToDisk()
         midiFile.setTicksPerQuarterNote (midiTicksPerQuarterNote);
         midiFile.addTrack (track);
 
-        const auto destination = folder.getChildFile ("Drumify Loop.mid").getNonexistentSibling();
+        // The chooser already confirmed any overwrite, but the stream appends by
+        // default so an existing file has to be truncated first.
+        destination.deleteFile();
 
         juce::FileOutputStream stream (destination);
 
@@ -1102,7 +1104,7 @@ void HackBrownAudioProcessorEditor::saveAudioToDisk()
         return;
     }
 
-    folderChooser ("Choose a folder to save the audio into...", [this] (const juce::File& folder)
+    fileSaver ("Save audio as...", "Drumify Loop.wav", ".wav", [this] (const juce::File& destination)
     {
         const auto& loop = audioProcessor.getRenderedLoop();
 
@@ -1110,7 +1112,21 @@ void HackBrownAudioProcessorEditor::saveAudioToDisk()
             return;
 
         const auto sampleRate = audioProcessor.getSampleRate() > 0.0 ? audioProcessor.getSampleRate() : 44100.0;
-        const auto destination = folder.getChildFile ("Drumify Loop.wav").getNonexistentSibling();
+
+        // renderDrumLoopOffline sizes the buffer for stereo but only ever writes
+        // channel 0, so the file would be left-ear only. Playback hides this by
+        // fanning channel 0 out to every output. Fill any silent channel from the
+        // first one - guarded, so a genuinely stereo render is left untouched.
+        juce::AudioBuffer<float> exportBuffer;
+        exportBuffer.makeCopyOf (loop);
+
+        for (int channel = 1; channel < exportBuffer.getNumChannels(); ++channel)
+            if (exportBuffer.getMagnitude (channel, 0, exportBuffer.getNumSamples()) == 0.0f)
+                exportBuffer.copyFrom (channel, 0, exportBuffer, 0, 0, exportBuffer.getNumSamples());
+
+        // The chooser already confirmed any overwrite, but the stream appends by
+        // default so an existing file has to be truncated first.
+        destination.deleteFile();
 
         auto fileStream = std::make_unique<juce::FileOutputStream> (destination);
 
@@ -1131,7 +1147,7 @@ void HackBrownAudioProcessorEditor::saveAudioToDisk()
         // success, so a failure here leaves the stream to clean itself up.
         auto writer = wavFormat.createWriterFor (stream, juce::AudioFormatWriterOptions {}
                                                             .withSampleRate (sampleRate)
-                                                            .withNumChannels (loop.getNumChannels())
+                                                            .withNumChannels (exportBuffer.getNumChannels())
                                                             .withBitsPerSample (24));
 
         if (writer == nullptr)
@@ -1142,7 +1158,7 @@ void HackBrownAudioProcessorEditor::saveAudioToDisk()
             return;
         }
 
-        const bool wroteOk = writer->writeFromAudioSampleBuffer (loop, 0, loop.getNumSamples());
+        const bool wroteOk = writer->writeFromAudioSampleBuffer (exportBuffer, 0, exportBuffer.getNumSamples());
         writer.reset();   // flushes and closes before we report success
 
         if (! wroteOk)
@@ -1155,26 +1171,38 @@ void HackBrownAudioProcessorEditor::saveAudioToDisk()
 
         juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon,
                                                 "Audio saved",
-                                                "Saved " + juce::String (loop.getNumSamples() / sampleRate, 2)
+                                                "Saved " + juce::String (exportBuffer.getNumSamples() / sampleRate, 2)
                                                   + "s to " + destination.getFullPathName());
     });
 }
 
-void HackBrownAudioProcessorEditor::folderChooser (const juce::String& title,
-                                                   std::function<void (const juce::File&)> folderAction)
+void HackBrownAudioProcessorEditor::fileSaver (const juce::String& title,
+                                               const juce::String& defaultFileName,
+                                               const juce::String& extension,
+                                               std::function<void (const juce::File&)> saveAction)
 {
-    chooser = std::make_unique<juce::FileChooser> (title,
-                                                   juce::File::getSpecialLocation (juce::File::userMusicDirectory));
+    const auto startingFile = juce::File::getSpecialLocation (juce::File::userMusicDirectory)
+                                 .getChildFile (defaultFileName);
 
-    auto chooserFlags = juce::FileBrowserComponent::openMode
-                          | juce::FileBrowserComponent::canSelectDirectories;
+    chooser = std::make_unique<juce::FileChooser> (title, startingFile, "*" + extension);
 
-    chooser->launchAsync (chooserFlags, [folderAction] (const juce::FileChooser& fc)
+    // warnAboutOverwriting lets the native panel handle the "replace?" prompt.
+    auto chooserFlags = juce::FileBrowserComponent::saveMode
+                          | juce::FileBrowserComponent::canSelectFiles
+                          | juce::FileBrowserComponent::warnAboutOverwriting;
+
+    chooser->launchAsync (chooserFlags, [saveAction, extension] (const juce::FileChooser& fc)
     {
-        const auto folder = fc.getResult();
+        auto file = fc.getResult();
 
-        if (folder != juce::File {} && folder.isDirectory())
-            folderAction (folder);
+        if (file == juce::File {})
+            return;
+
+        // Not every panel appends the extension when the user types a bare name.
+        if (! file.hasFileExtension (extension))
+            file = file.withFileExtension (extension);
+
+        saveAction (file);
     });
 }
 

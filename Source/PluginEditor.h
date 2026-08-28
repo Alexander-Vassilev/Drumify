@@ -309,9 +309,13 @@ public:
     void saveMidiToDisk();
     void saveAudioToDisk();
 
-    /** Asks for a destination folder, then hands it to `folderAction`. */
-    void folderChooser (const juce::String& title,
-                        std::function<void (const juce::File&)> folderAction);
+    /** Asks where to save and under what name, then hands the file to `saveAction`.
+        `extension` is appended if the chooser hands back a name without one.
+    */
+    void fileSaver (const juce::String& title,
+                    const juce::String& defaultFileName,
+                    const juce::String& extension,
+                    std::function<void (const juce::File&)> saveAction);
 
     bool isInterestedInFileDrag (const juce::StringArray& files) override;
     void filesDropped (const juce::StringArray& files, int x, int y) override;
