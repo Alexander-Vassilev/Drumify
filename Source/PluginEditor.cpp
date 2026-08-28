@@ -14,13 +14,49 @@
 // The copy shown by the "?" button in the top row. Replace this with the real
 // text - it is the only thing the info popup renders.
 static const char* const infoPanelText =
-    "Beatbox a groove into your mic and Drumify works out which hits are kicks, "
-    "snares and hats, then plays the pattern back using the samples you drop in.\n"
+    "Welcome to Drumify! This is an experience that lets you transform any drumloop to your "
+    "heart's desire. Beatbox into the microphone or import loops of your own and Drumify's "
+    "algorithm will replace all of the kicks, snares, and hats with your own samples. Enjoy!\n"
     "\n"
-    "Hover a drum in the kit to load the sample it should trigger. Hover the top "
-    "of the microphone to record, or the bottom to upload a loop instead.\n"
+    "Motivation:\n"
+    "Drumify started with my firm belief that our mouth is humanity's most intuitive instrument. "
+    "I wanted to create a fun and unique tool that allows users of all levels of musical "
+    "experience to enjoy a fresh drum workflow. Rather than having to draw out a loop by hand or "
+    "buy a midi controller, you can just beatbox your desired drumloop into the microphone and "
+    "import it into your DAW, or do whatever you want with it, really.\n"
     "\n"
-    "(Placeholder text - write the real thing here.)";
+    "\"Well, I do not really like using my own voice\" -Hypothetical reader\n"
+    "\n"
+    "I hear you loud and clear, which is why Drumify has a second input method: audio files. If "
+    "you ever find a really cool drum loop on Splice or out in the wild and want to replace the "
+    "drum hits with your own sounds, you can!\n"
+    "\n"
+    "Instructions:\n"
+    "\"Woah, this does not look like any VST I have ever used\" -Hypothetical reader\n"
+    "\n"
+    "I hear you loud and clear, which is why I included this video for a live demo: (link)\n"
+    "\n"
+    "If you prefer to read, here are the instructions:\n"
+    "\n"
+    "Drumset: Click individual drums to import your own samples, which can be kicks, snares, or "
+    "hats, although feel free to experiment and throw in whatever you want!\n"
+    "\n"
+    "Microphone: Click the top half of the capsule to record beatboxing or any live sound, then "
+    "click again to stop. As an alternative input method, click the bottom half of the capsule "
+    "to load an input loop. After doing either of these, Drumify will detect all of the drum hits "
+    "and replace them in real time!\n"
+    "\n"
+    "Speakers: The left speaker previews your input so you can hear the original, and the right "
+    "speaker plays the replaced drumhits!\n"
+    "\n"
+    "Save Buttons: If you are happy with the output, click the left button to save a midi file "
+    "and/or click the right one to save an audio file. Alternatively, you can drag and drop "
+    "directly into your session.\n"
+    "\n"
+    "Menu: The question mark shows the info page (You happen to be looking at it), which you can "
+    "revisit at any time. The plus button shows advanced settings, which lets you change "
+    "Drumify's algorithm. The rotating arrows update the output, if you are happy with the "
+    "input but replaced your samples or changed the algorithm.\n";
 
 //==============================================================================
 juce::Font DrumifyTheme::mono (float height, bool bold)
@@ -277,6 +313,7 @@ DrumifyLookAndFeel::DrumifyLookAndFeel()
 {
     setColour (juce::TextButton::textColourOffId, DrumifyTheme::ink);
     setColour (juce::TextButton::textColourOnId,  DrumifyTheme::ink);
+    setColour (juce::ScrollBar::thumbColourId,    DrumifyTheme::ink);
     setColour (juce::Label::textColourId,         DrumifyTheme::ink);
 
     setColour (juce::Slider::backgroundColourId,        DrumifyTheme::panelEdge.withAlpha (0.35f));
@@ -543,12 +580,42 @@ void SaveComponent::setZone (Zone z)
 void SaveComponent::mouseMove (const juce::MouseEvent& e) { setZone (zoneAt (e.position)); }
 void SaveComponent::mouseExit (const juce::MouseEvent&)   { setZone (Zone::none); }
 
+void SaveComponent::mouseDown (const juce::MouseEvent& e)
+{
+    pressedZone = zoneAt (e.position);
+    dragStarted = false;
+}
+
+void SaveComponent::mouseDrag (const juce::MouseEvent& e)
+{
+    // One export per gesture: the OS drag runs its own event loop, so without
+    // this latch mouseDrag would re-enter and start a second drag.
+    if (dragStarted || pressedZone == Zone::none || onZoneDragged == nullptr)
+        return;
+
+    if (e.getDistanceFromDragStart() < 8)
+        return;
+
+    dragStarted = true;
+    onZoneDragged (pressedZone);
+
+    // The OS drag can swallow the mouseExit, which would leave the section stuck
+    // in its hovered state once the pointer has gone.
+    setZone (Zone::none);
+}
+
 void SaveComponent::mouseUp (const juce::MouseEvent& e)
 {
-    const auto z = zoneAt (e.position);
+    const auto z = pressedZone;
 
-    if (e.mouseWasClicked() && z != Zone::none && onZoneClicked != nullptr)
+    pressedZone = Zone::none;
+
+    // mouseWasClicked() is already false once the pointer has travelled far
+    // enough to drag, so a drag never also fires the click action.
+    if (! dragStarted && e.mouseWasClicked() && z != Zone::none && onZoneClicked != nullptr)
         onZoneClicked (z);
+
+    dragStarted = false;
 }
 
 void SaveComponent::paint (juce::Graphics& g)
@@ -721,48 +788,37 @@ void MicrophoneComponent::paint (juce::Graphics& g)
 }
 
 //==============================================================================
-/** The contents of the "?" popup. */
-class InfoPanel : public juce::Component
+InfoPageComponent::InfoPageComponent()
 {
-public:
-    InfoPanel()
-    {
-        body.setMultiLine (true);
-        body.setReadOnly (true);
-        body.setScrollbarsShown (true);
-        body.setCaretVisible (false);
-        body.setPopupMenuEnabled (false);
-        body.setFont (DrumifyTheme::mono (13.0f));
-        body.setColour (juce::TextEditor::backgroundColourId,     juce::Colours::transparentBlack);
-        body.setColour (juce::TextEditor::outlineColourId,        juce::Colours::transparentBlack);
-        body.setColour (juce::TextEditor::focusedOutlineColourId, juce::Colours::transparentBlack);
-        body.setColour (juce::TextEditor::textColourId,           DrumifyTheme::ink);
-        body.setText (infoPanelText, false);
-        addAndMakeVisible (body);
+    body.setMultiLine (true);
+    body.setReadOnly (true);
+    body.setScrollbarsShown (true);
+    body.setCaretVisible (false);
+    body.setPopupMenuEnabled (false);
+    body.setFont (DrumifyTheme::mono (24.0f));
+    body.setLineSpacing (1.18f);
+    body.setColour (juce::TextEditor::backgroundColourId,     juce::Colours::transparentBlack);
+    body.setColour (juce::TextEditor::outlineColourId,        juce::Colours::transparentBlack);
+    body.setColour (juce::TextEditor::focusedOutlineColourId, juce::Colours::transparentBlack);
+    body.setColour (juce::TextEditor::textColourId,           DrumifyTheme::ink);
+    body.setText (infoPanelText, false);
+    addAndMakeVisible (body);
+}
 
-        setSize (340, 250);
-    }
+void InfoPageComponent::paint (juce::Graphics& g)
+{
+    g.setColour (DrumifyTheme::ink);
+    g.setFont (DrumifyTheme::mono (32.0f, true));
+    g.drawText ("About Drumify", getLocalBounds().removeFromTop (46),
+                juce::Justification::centred);
+}
 
-    void paint (juce::Graphics& g) override
-    {
-        g.setColour (DrumifyTheme::ink);
-        g.setFont (DrumifyTheme::mono (18.0f, true));
-        g.drawText ("About Drumify", getLocalBounds().removeFromTop (30),
-                    juce::Justification::centredLeft);
-    }
-
-    void resized() override
-    {
-        auto area = getLocalBounds();
-        area.removeFromTop (34);
-        body.setBounds (area);
-    }
-
-private:
-    juce::TextEditor body;
-
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (InfoPanel)
-};
+void InfoPageComponent::resized()
+{
+    auto area = getLocalBounds();
+    area.removeFromTop (58);
+    body.setBounds (area);
+}
 
 //==============================================================================
 /** The contents of the "+" popup. Add further options here. */
@@ -859,9 +915,17 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
         z == SaveComponent::Zone::left ? saveMidiToDisk() : saveAudioToDisk();
     };
 
+    saveButtons.onZoneDragged = [this] (SaveComponent::Zone z) { startDragExport (z); };
+
+    // Scratch files from previous sessions are only safe to remove now: a host
+    // that referenced rather than copied one still needed it after the drop.
+    if (auto folder = getDragExportFolder(); folder.isDirectory())
+        for (const auto& stale : folder.findChildFiles (juce::File::findFiles, false))
+            stale.deleteFile();
+
     updateButton.onClick   = [this] { audioProcessor.reconstructLoopFromHits(); };
     plusButton.onClick     = [this] { showSettingsPopup(); };
-    questionButton.onClick = [this] { showInfoPopup(); };
+    questionButton.onClick = [this] { toggleInfoPage(); };
 
     formatManager.registerBasicFormats();
 
@@ -871,6 +935,9 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
     addAndMakeVisible (updateButton);
     addAndMakeVisible (plusButton);
     addAndMakeVisible (questionButton);
+
+    // Added last so it draws over the controls as they pass each other.
+    addAndMakeVisible (infoPage);
     addAndMakeVisible (saveButtons);
 
     setSize (DrumifyLayout::canvasWidth, DrumifyLayout::canvasHeight);
@@ -884,12 +951,14 @@ HackBrownAudioProcessorEditor::~HackBrownAudioProcessorEditor()
 //==============================================================================
 void HackBrownAudioProcessorEditor::paint (juce::Graphics& g)
 {
+    // The paper backdrop stays put; everything sitting on it slides.
     assets.background.drawFrame (g, getLocalBounds().toFloat());
 
     assets.title.drawContent (g, juce::Rectangle<float> ((float) DrumifyLayout::titleX,
                                                          (float) DrumifyLayout::titleY,
                                                          (float) DrumifyLayout::titleW,
-                                                         (float) DrumifyLayout::titleH));
+                                                         (float) DrumifyLayout::titleH)
+                                   .translated (slideProgress * (float) getWidth(), 0.0f));
 
     if (isDragging)
     {
@@ -909,14 +978,24 @@ void HackBrownAudioProcessorEditor::resized()
 {
     using namespace DrumifyLayout;
 
+    // Everything except the "?" rides this offset: at rest it is zero, and when
+    // the about page is open the controls have slid a full width to the right.
+    // Off-window bounds also stop the hidden controls seeing the mouse.
+    const auto shift = juce::roundToInt (slideProgress * (float) getWidth());
+
     // The drum layers are canvas-aligned, so this covers the whole editor and
     // relies on per-pixel hit testing to stay out of everything else's way.
-    drumKit.setBounds (getLocalBounds());
-    speakers.setBounds (getLocalBounds());
-    saveButtons.setBounds (getLocalBounds());
+    drumKit.setBounds (getLocalBounds().translated (shift, 0));
+    speakers.setBounds (getLocalBounds().translated (shift, 0));
+    saveButtons.setBounds (getLocalBounds().translated (shift, 0));
 
-    microphone.setBounds (micCentreX - micFrameSize / 2, micTop,
-                          micFrameSize, canvasHeight - micTop);
+    microphone.setBounds (juce::Rectangle<int> (micCentreX - micFrameSize / 2, micTop,
+                                                micFrameSize, canvasHeight - micTop)
+                            .translated (shift, 0));
+
+    // The about page trails a full width behind, so it arrives as the rest leaves.
+    infoPage.setBounds (juce::Rectangle<int> (infoPageX, infoPageY, infoPageW, infoPageH)
+                          .translated (shift - getWidth(), 0));
 
     // The three icons sit in a right-aligned row, each keeping its own aspect.
     const std::pair<AssetButton*, const AssetLayer*> icons[]
@@ -945,7 +1024,10 @@ void HackBrownAudioProcessorEditor::resized()
 
     for (size_t i = 0; i < widths.size(); ++i)
     {
-        icons[i].first->setBounds (x - padding, menuCentreY - menuIconHeight / 2 - padding,
+        // The "?" stays put while the rest slides away - it is the way back.
+        const auto iconShift = (icons[i].first == &questionButton) ? 0 : shift;
+
+        icons[i].first->setBounds (x - padding + iconShift, menuCentreY - menuIconHeight / 2 - padding,
                                    widths[i] + padding * 2, menuIconHeight + padding * 2);
         x += widths[i] + menuGap;
     }
@@ -974,10 +1056,30 @@ void HackBrownAudioProcessorEditor::loadDrumSample (DrumType drum)
     audioProcessor.getLongestSampleLengthInSamples();
 }
 
-void HackBrownAudioProcessorEditor::showInfoPopup()
+void HackBrownAudioProcessorEditor::toggleInfoPage()
 {
-    juce::CallOutBox::launchAsynchronously (std::make_unique<InfoPanel>(),
-                                            questionButton.getBounds(), this);
+    infoPageVisible = ! infoPageVisible;
+    startTimerHz (60);
+}
+
+void HackBrownAudioProcessorEditor::timerCallback()
+{
+    const auto target = infoPageVisible ? 1.0f : 0.0f;
+    const auto remaining = target - slideProgress;
+
+    // Exponential ease-out: fast off the mark, gentle as it settles.
+    if (std::abs (remaining) < 0.003f)
+    {
+        slideProgress = target;
+        stopTimer();
+    }
+    else
+    {
+        slideProgress += remaining * 0.2f;
+    }
+
+    resized();
+    repaint();
 }
 
 void HackBrownAudioProcessorEditor::showSettingsPopup()
@@ -1013,25 +1115,20 @@ static constexpr int midiTicksPerQuarterNote = 960;
 static constexpr int midiMicrosecondsPerQuarter = 500000;   // 120 BPM
 static constexpr int generalMidiDrumChannel = 10;
 
-void HackBrownAudioProcessorEditor::saveMidiToDisk()
+bool HackBrownAudioProcessorEditor::writeMidiTo (const juce::File& destination, bool reportFailures)
 {
     const auto& hits = audioProcessor.inputProcessor.classifiedHits;
 
     if (hits.empty())
     {
-        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
-                                                "Nothing to save",
-                                                "Record a rhythm or upload a loop first - there are no drum hits yet.");
-        return;
+        if (reportFailures)
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                                                    "Nothing to save",
+                                                    "Record a rhythm or upload a loop first - there are no drum hits yet.");
+        return false;
     }
 
-    fileSaver ("Save MIDI as...", "Drumify Loop.mid", ".mid", [this] (const juce::File& destination)
     {
-        const auto& hits = audioProcessor.inputProcessor.classifiedHits;
-
-        if (hits.empty())
-            return;
-
         const auto sampleRate = audioProcessor.getSampleRate() > 0.0 ? audioProcessor.getSampleRate() : 44100.0;
         const auto speed = (double) audioProcessor.playbackSpeed;
         const auto firstOnset = (double) hits.front().onsetSample * speed;
@@ -1079,37 +1176,54 @@ void HackBrownAudioProcessorEditor::saveMidiToDisk()
 
         if (! stream.openedOk() || ! midiFile.writeTo (stream))
         {
-            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
-                                                    "Could not save",
-                                                    "Writing to " + destination.getFullPathName() + " failed.");
-            return;
+            if (reportFailures)
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                                                        "Could not save",
+                                                        "Writing to " + destination.getFullPathName() + " failed.");
+            return false;
         }
 
         stream.flush();
+    }
 
-        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon,
-                                                "MIDI saved",
-                                                "Saved " + juce::String (hits.size()) + " hits to "
-                                                  + destination.getFullPathName());
-    });
+    return true;
 }
 
-void HackBrownAudioProcessorEditor::saveAudioToDisk()
+void HackBrownAudioProcessorEditor::saveMidiToDisk()
 {
-    if (audioProcessor.getRenderedLoop().getNumSamples() == 0)
+    if (audioProcessor.inputProcessor.classifiedHits.empty())
     {
         juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
                                                 "Nothing to save",
-                                                "Record a rhythm or upload a loop first - no audio has been generated yet.");
+                                                "Record a rhythm or upload a loop first - there are no drum hits yet.");
         return;
     }
 
-    fileSaver ("Save audio as...", "Drumify Loop.wav", ".wav", [this] (const juce::File& destination)
+    fileSaver ("Save MIDI as...", "Drumify Loop.mid", ".mid", [this] (const juce::File& destination)
+    {
+        const auto hitCount = audioProcessor.inputProcessor.classifiedHits.size();
+
+        if (writeMidiTo (destination, true))
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon,
+                                                    "MIDI saved",
+                                                    "Saved " + juce::String (hitCount) + " hits to "
+                                                      + destination.getFullPathName());
+    });
+}
+
+bool HackBrownAudioProcessorEditor::writeAudioTo (const juce::File& destination, bool reportFailures)
+{
     {
         const auto& loop = audioProcessor.getRenderedLoop();
 
         if (loop.getNumSamples() == 0 || loop.getNumChannels() == 0)
-            return;
+        {
+            if (reportFailures)
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                                                        "Nothing to save",
+                                                        "Record a rhythm or upload a loop first - no audio has been generated yet.");
+            return false;
+        }
 
         const auto sampleRate = audioProcessor.getSampleRate() > 0.0 ? audioProcessor.getSampleRate() : 44100.0;
 
@@ -1132,10 +1246,11 @@ void HackBrownAudioProcessorEditor::saveAudioToDisk()
 
         if (! fileStream->openedOk())
         {
-            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
-                                                    "Could not save",
-                                                    "Could not open " + destination.getFullPathName() + " for writing.");
-            return;
+            if (reportFailures)
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                                                        "Could not save",
+                                                        "Could not open " + destination.getFullPathName() + " for writing.");
+            return false;
         }
 
         // createWriterFor takes a unique_ptr<OutputStream>&, so hand it the base type.
@@ -1152,10 +1267,11 @@ void HackBrownAudioProcessorEditor::saveAudioToDisk()
 
         if (writer == nullptr)
         {
-            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
-                                                    "Could not save",
-                                                    "Could not create a WAV writer for " + destination.getFullPathName());
-            return;
+            if (reportFailures)
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                                                        "Could not save",
+                                                        "Could not create a WAV writer for " + destination.getFullPathName());
+            return false;
         }
 
         const bool wroteOk = writer->writeFromAudioSampleBuffer (exportBuffer, 0, exportBuffer.getNumSamples());
@@ -1163,17 +1279,82 @@ void HackBrownAudioProcessorEditor::saveAudioToDisk()
 
         if (! wroteOk)
         {
-            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
-                                                    "Could not save",
-                                                    "Writing to " + destination.getFullPathName() + " failed.");
-            return;
+            if (reportFailures)
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                                                        "Could not save",
+                                                        "Writing to " + destination.getFullPathName() + " failed.");
+            return false;
         }
+    }
 
-        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon,
-                                                "Audio saved",
-                                                "Saved " + juce::String (exportBuffer.getNumSamples() / sampleRate, 2)
-                                                  + "s to " + destination.getFullPathName());
+    return true;
+}
+
+void HackBrownAudioProcessorEditor::saveAudioToDisk()
+{
+    if (audioProcessor.getRenderedLoop().getNumSamples() == 0)
+    {
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                                                "Nothing to save",
+                                                "Record a rhythm or upload a loop first - no audio has been generated yet.");
+        return;
+    }
+
+    fileSaver ("Save audio as...", "Drumify Loop.wav", ".wav", [this] (const juce::File& destination)
+    {
+        const auto sampleRate = audioProcessor.getSampleRate() > 0.0 ? audioProcessor.getSampleRate() : 44100.0;
+        const auto lengthSeconds = audioProcessor.getRenderedLoop().getNumSamples() / sampleRate;
+
+        if (writeAudioTo (destination, true))
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon,
+                                                    "Audio saved",
+                                                    "Saved " + juce::String (lengthSeconds, 2)
+                                                      + "s to " + destination.getFullPathName());
     });
+}
+
+juce::File HackBrownAudioProcessorEditor::getDragExportFolder() const
+{
+    return juce::File::getSpecialLocation (juce::File::tempDirectory)
+             .getChildFile ("Drumify Drags");
+}
+
+void HackBrownAudioProcessorEditor::startDragExport (SaveComponent::Zone zone)
+{
+    if (zone == SaveComponent::Zone::none)
+        return;
+
+    const bool wantsMidi = (zone == SaveComponent::Zone::left);
+
+    // A host is handed a path, not data, so the file has to exist before the
+    // drag begins. Failures are reported here rather than inside the writer,
+    // which would otherwise pop an alert in the middle of a drag gesture.
+    if (wantsMidi ? audioProcessor.inputProcessor.classifiedHits.empty()
+                  : audioProcessor.getRenderedLoop().getNumSamples() == 0)
+        return;
+
+    const auto folder = getDragExportFolder();
+
+    if (! folder.createDirectory())
+        return;
+
+    // A fresh name per drag: whatever this is called becomes the clip name on
+    // the host's timeline, and reusing one name across drags is confusing.
+    const auto stamp = juce::Time::getCurrentTime().formatted ("%Y%m%d-%H%M%S");
+    const auto destination = folder.getChildFile ("Drumify " + stamp + (wantsMidi ? ".mid" : ".wav"))
+                                .getNonexistentSibling();
+
+    const bool wroteOk = wantsMidi ? writeMidiTo (destination, false)
+                                   : writeAudioTo (destination, false);
+
+    if (! wroteOk)
+        return;
+
+    // Copy, never move - the host may only reference the file, and these are
+    // swept on the next editor launch rather than after the drop, because the
+    // drag ending says nothing about whether the host still needs it.
+    juce::DragAndDropContainer::performExternalDragDropOfFiles (
+        { destination.getFullPathName() }, false, this);
 }
 
 void HackBrownAudioProcessorEditor::fileSaver (const juce::String& title,

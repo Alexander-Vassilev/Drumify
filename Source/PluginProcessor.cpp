@@ -616,9 +616,11 @@ void HackBrownAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
     
     auto totalNumInputChannels  = getTotalNumInputChannels();
     
+    // A host may legitimately call us with an empty buffer or no input bus - when
+    // the plugin sits on a track with no input, or while it is being probed - so
+    // this must bow out quietly rather than assert.
     if (buffer.getNumSamples() == 0 || totalNumInputChannels == 0) {
-        DBG("input channels 0");
-        jassertfalse;
+        buffer.clear();
         return;
     }
     

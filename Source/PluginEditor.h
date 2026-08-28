@@ -59,6 +59,9 @@ namespace DrumifyLayout
     constexpr int micCentreX = 600, micFrameSize = 420;
     constexpr int micTop = 215;   // top of the component, i.e. above the label
 
+    // The about page, which slides in from the left over the centre of the plugin
+    constexpr int infoPageX = 250, infoPageY = 84, infoPageW = 700, infoPageH = 556;
+
     // The speaker and save layers are canvas-aligned too; only their captions
     // need placing.
     constexpr int speakerLabelCentreX = 928, speakerLabelCentreY = 402;
@@ -231,13 +234,16 @@ public:
     explicit SaveComponent (const DrumifyAssets&);
 
     std::function<void (Zone)> onZoneClicked;
+    std::function<void (Zone)> onZoneDragged;
 
     void paint (juce::Graphics&) override;
 
     bool hitTest (int x, int y) override;
     void mouseMove (const juce::MouseEvent&) override;
     void mouseExit (const juce::MouseEvent&) override;
+    void mouseDown (const juce::MouseEvent&) override;
     void mouseUp (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
 
 private:
     Zone zoneAt (juce::Point<float>) const;
@@ -245,6 +251,11 @@ private:
 
     const DrumifyAssets& assets;
     Zone zone = Zone::none;
+
+    // The zone the press started on, so a drag that wanders still exports the
+    // file the user actually grabbed.
+    Zone pressedZone = Zone::none;
+    bool dragStarted = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SaveComponent)
 };
@@ -292,9 +303,27 @@ private:
 };
 
 //==============================================================================
+/** The scrollable "about" text that slides in when the "?" is clicked. */
+class InfoPageComponent : public juce::Component
+{
+public:
+    InfoPageComponent();
+
+    void paint (juce::Graphics&) override;
+    void resized() override;
+
+private:
+    juce::TextEditor body;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (InfoPageComponent)
+};
+
+//==============================================================================
 /**
 */
-class HackBrownAudioProcessorEditor  : public juce::AudioProcessorEditor, public juce::FileDragAndDropTarget
+class HackBrownAudioProcessorEditor  : public juce::AudioProcessorEditor,
+                                       public juce::FileDragAndDropTarget,
+                                       private juce::Timer
 {
 public:
     HackBrownAudioProcessorEditor (HackBrownAudioProcessor&);
@@ -308,6 +337,13 @@ public:
     void loadDrumLoopFromDisk();
     void saveMidiToDisk();
     void saveAudioToDisk();
+
+    /** Render the current loop to a file. Shared by the save buttons and by the
+        drag-out, so a dragged file is always identical to a saved one.
+        Both return false (and report why) if there is nothing to write.
+    */
+    bool writeMidiTo (const juce::File& destination, bool reportFailures);
+    bool writeAudioTo (const juce::File& destination, bool reportFailures);
 
     /** Asks where to save and under what name, then hands the file to `saveAction`.
         `extension` is appended if the chooser hands back a name without one.
@@ -323,7 +359,19 @@ public:
     void fileDragExit (const juce::StringArray& files) override;
 
 private:
-    void showInfoPopup();
+    /** Writes the export to a scratch file and hands it to the OS as a drag, so
+        it can be dropped straight onto a track in the host.
+    */
+    void startDragExport (SaveComponent::Zone zone);
+
+    /** Scratch folder holding files handed to the host by drag-and-drop. */
+    juce::File getDragExportFolder() const;
+
+    /** Slides the main controls out to the right and the about text in from the
+        left, or back again. Driven by the timer below.
+    */
+    void toggleInfoPage();
+    void timerCallback() override;
     void showSettingsPopup();
     void toggleRecording();
     void loadDrumSample (DrumType);
@@ -335,6 +383,12 @@ private:
     AssetButton updateButton   { assets.menuUpdate,   "Rebuild Loop" };
     AssetButton plusButton     { assets.menuPlus,     "Settings" };
     AssetButton questionButton { assets.menuQuestion, "About" };
+
+    InfoPageComponent infoPage;
+
+    // 0 = main controls centred, 1 = about page centred.
+    float slideProgress = 0.0f;
+    bool infoPageVisible = false;
 
     DrumKitComponent drumKit { assets };
     SpeakerComponent speakers { assets };
