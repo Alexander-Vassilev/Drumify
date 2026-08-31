@@ -89,11 +89,11 @@ float HitClassifier::getDelta(const std::vector<float>& values, const std::vecto
     int searchLimit = std::min(numFrames, 9);
     auto maxIt = std::max_element(volumes.begin(), volumes.begin() + searchLimit);
     int peakIndex = static_cast<int>(std::distance(volumes.begin(), maxIt));
-
+    
     // 3. Clamp peakIndex so we can always fit exactly 6 frames [C++17 std::clamp]
     // The maximum possible starting index is (numFrames - 6)
     peakIndex = std::clamp(peakIndex, 0, numFrames - intendedFrameCount);
-
+    DBG("start index for delta finding: " << peakIndex);
     // Constant parameters for exactly 6 iterations
     const float M = static_cast<float>(intendedFrameCount);
     const int loopEnd = peakIndex + intendedFrameCount;
@@ -185,6 +185,7 @@ HitType HitClassifier::classify(const HitFeatures& f, std::ofstream& csvFile)
         const int numWindows = f.stftData.size();
         int analysisLen = std::min(numWindows, 28);
         std::vector<float> spectralCentroids;
+        std::vector<float> lowMidCentroids;
         std::vector<float> avgLowEnergies;
         std::vector<float> avgLowMidEnergies;
         std::vector<float> avgMidEnergies;
@@ -199,19 +200,19 @@ HitType HitClassifier::classify(const HitFeatures& f, std::ofstream& csvFile)
             
             float totalEnergy = 0.0f;
             
-            for (int j = 0; j < numFilters; j++) {
-                std::cout << std::fixed << std::setprecision(1) << std::setw(5) << fftFilterbank[j] << " ";
-                totalEnergy += fftFilterbank[j];
-            }
-            std::cout << std::endl;
+            for (int j = 0; j < numFilters; j++) totalEnergy += fftFilterbank[j];
             
             const float silenceThreshold = 10.0f;
-            if (totalEnergy < silenceThreshold) {
-                continue;
-            }
+            
+            if (totalEnergy < silenceThreshold) continue;
+            
+            for (int j = 0; j < numFilters; j++)
+                std::cout << std::fixed << std::setprecision(1) << std::setw(5) << fftFilterbank[j] << " ";
+            std::cout << std::endl;
             
             // 2. Extract features cleanly using the helper class
-            float centroid = DrumFeatureExtractor::calculateSpectralCentroid(fftFilterbank);
+            float centroid = DrumFeatureExtractor::calculateSpectralCentroid(fftFilterbank, 0, numFilters);
+            float lowMidCentroid = DrumFeatureExtractor::calculateSpectralCentroid(fftFilterbank, 0, 8);
             float prominence = DrumFeatureExtractor::calculateLowMidProminence(f.stftData[i], 44100, FFTProcessor::numBins);
             float lowEnergy = DrumFeatureExtractor::calculateAvgEnergyInBand(fftFilterbank, 0, 3);
             float lowMidEnergy = DrumFeatureExtractor::calculateAvgEnergyInBand(fftFilterbank, 0, 5);
@@ -220,6 +221,7 @@ HitType HitClassifier::classify(const HitFeatures& f, std::ofstream& csvFile)
             float highEnergy = DrumFeatureExtractor::calculateAvgEnergyInBand(fftFilterbank, 17, 25);
             
             spectralCentroids.push_back(centroid);
+            lowMidCentroids.push_back(lowMidCentroid);
             prominences.push_back(prominence);
             avgLowEnergies.push_back(lowEnergy);
             avgLowMidEnergies.push_back(lowMidEnergy);
@@ -277,7 +279,7 @@ HitType HitClassifier::classify(const HitFeatures& f, std::ofstream& csvFile)
 
             // C. Calculate Delta (Spectral Shift Direction: End - Start)
             //pooledFeatures.centroidDelta = getDelta(spectralCentroids);
-            pooledFeatures.centroidDelta = getDelta(avgLowMidEnergies, totalEnergies);
+            pooledFeatures.centroidDelta = getDelta(lowMidCentroids, totalEnergies);
             
             pooledFeatures.lowDecayCentroid  = DrumFeatureExtractor::calculateTemporalCentroid(avgLowEnergies);
             pooledFeatures.highDecayCentroid = DrumFeatureExtractor::calculateTemporalCentroid(avgMidHighEnergies);

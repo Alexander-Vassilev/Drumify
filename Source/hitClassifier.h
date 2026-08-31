@@ -152,12 +152,15 @@ public:
 
     // Calculates the centroid (brightness) of the filterbank
     template <size_t numFilters>
-    static float calculateSpectralCentroid(const std::array<float, numFilters>& filterbank)
+    static float calculateSpectralCentroid(const std::array<float, numFilters>& filterbank, int lowBand, int highBand)
     {
+        const int maxValidIndex = static_cast<int>(numFilters) - 1;
+        int start = std::clamp(lowBand, 0, maxValidIndex);
+        int end   = std::clamp(highBand, 0, maxValidIndex);
         float weightedSum = 0.0f;
         float totalSum = 0.0f;
         
-        for (size_t j = 0; j < numFilters; j++)
+        for (size_t j = start; j < end; j++)
         {
             float energy = filterbank[j];
             weightedSum += static_cast<float>(j) * energy;
