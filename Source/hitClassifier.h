@@ -81,7 +81,7 @@ const DrumClassParameters hatParams {
     
     {
         0.0,  // centroidWeight
-        1,  // deltaWeight
+        1.3,  // deltaWeight
         1.0,  // topWeight
         0.6   // lowWeight
     }
@@ -109,7 +109,7 @@ const DrumClassParameters snareParams {
     
     {
         1,  // centroidWeight
-        1.5,  // deltaWeight
+        1.0,  // deltaWeight
         1.2,  // topWeight
         1.2   // lowWeight
     }

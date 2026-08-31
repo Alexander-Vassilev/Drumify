@@ -131,7 +131,7 @@ public:
         
         float normFactor = 1.0f / (totalEnergy + 0.05f);
         
-        if (writeToFile) {
+        if (writeToFile && false) {
             logFile << std::fixed << std::setprecision(0) << std::setw(10) << currSample << " ";
         }
         

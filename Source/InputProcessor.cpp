@@ -236,6 +236,25 @@ void InputProcessor::classifyStoredHits(double sampleRate)
     classifiedHits.clear();
     classifiedHits.reserve(storedHitsIndex);
 
+    // Raw STFT dump: one row per frame, one column per bin. Truncated on every
+    // run so the file always holds exactly the take that was just classified,
+    // rather than accumulating across takes the way the feature CSV does.
+    const auto stftFile = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+                              .getChildFile("DrumifyAnalysis")
+                              .getChildFile("stft_bins.txt");
+
+    stftFile.getParentDirectory().createDirectory();
+
+    std::ofstream stftOut(stftFile.getFullPathName().toStdString(),
+                          std::ios::out | std::ios::trunc);
+
+    // Magnitudes are unnormalised |FFT| and so cannot exceed about fftSize/2,
+    // i.e. 4 integer digits. 9 leaves "1024.00" two spaces of separation; a
+    // value wider than the field would push the whole row out of alignment.
+    constexpr int stftBinFieldWidth = 9;
+
+    DBG("STFT dump -> " << stftFile.getFullPathName());
+
     DBG("---- Classifying Stored Hits ----");
     DBG(storedHitsIndex << " Hits classified");
     //storedHitsIndex = 1;
@@ -278,15 +297,32 @@ void InputProcessor::classifyStoredHits(double sampleRate)
         const auto features = hitClassifier.extractFeatures(hit.buffer, hit.hitLength, sampleRate);
         
         DBG("STFT window count: " << features.stftData.size());
-        
-        for (int i = 0; i < 4; i++) {
-            //std::cout << "bins begin: ";
-            
-            for (int j = 0; j < FFTProcessor::numBins; j+= 20) {
-                //std::cout << std::trunc(100 * features.stftData[i][j]) / 100 << " ";
+
+        if (stftOut.is_open())
+        {
+            // '#' prefix so numpy.loadtxt and friends skip the per-hit headers
+            // and still read the whole file as a matrix of frames.
+            stftOut << "# hit " << i
+                    << " frames " << features.stftData.size()
+                    << " bins " << FFTProcessor::numBins
+                    << " sampleRate " << sampleRate
+                    << " onsetSample " << hit.onsetSample << '\n';
+
+            // Fixed 2dp in a fixed-width field, so every bin occupies the same
+            // number of characters and the columns line up down the file.
+            stftOut << std::fixed << std::setprecision(2);
+
+            for (const auto& frame : features.stftData)
+            {
+                for (int bin = 0; bin < FFTProcessor::numBins; ++bin)
+                    stftOut << std::setw(stftBinFieldWidth) << frame[bin];
+
+                stftOut << '\n';
             }
-            
-            //std::cout << "bins end" << std::endl;
+
+            // Precision has to go back with the format: leaving it at 2 would
+            // turn the next hit's header into "sampleRate 4.4e+04".
+            stftOut << std::defaultfloat << std::setprecision(6);
         }
         
         ClassifiedHit classified;
