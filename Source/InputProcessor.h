@@ -483,7 +483,7 @@ public:
         // 1. Target the Downloads folder
         auto downloadsDir = juce::File::getSpecialLocation(juce::File::userHomeDirectory)
                             .getChildFile("Downloads");
-        juce::File file ("/Users/lightspark/Documents/JuceProjects/HackBrown2026/Data/snarestats.csv");
+        juce::File file ("/Users/lightspark/Documents/JuceProjects/HackBrown2026/Data/kickstats.csv");
         //auto file = downloadsDir.getChildFile("drum_features.csv");
 
         // 2. Check if the file is new before opening it

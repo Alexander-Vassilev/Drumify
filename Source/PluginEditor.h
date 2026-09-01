@@ -335,6 +335,11 @@ public:
 
     void fileOpener(std::function<void (const juce::File&)> fileAction);
     void loadDrumLoopFromDisk();
+
+    /** Dev tool: runs every .wav under a sample folder through the analyser so
+        each detected hit appends a row of features to InputProcessor's CSV.
+    */
+    void batchAnalyseFolder();
     void saveMidiToDisk();
     void saveAudioToDisk();
 

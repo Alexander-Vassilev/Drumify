@@ -3,6 +3,12 @@
 #include <algorithm>
 
 PooledHitFeatures HitClassifier::totalFeatures {};
+HitClassifier::FeatureStats HitClassifier::batchStats {};
+
+const char* const HitClassifier::trackedFeatureNames[HitClassifier::numTrackedFeatures]
+{
+    "MeanCentroid", "Delta", "TopEndHeavyRatio", "LowEndHeavyRatio", "HighLowDecayRatio"
+};
 
 float HitClassifier::computeRMS(const juce::AudioBuffer<float>& buffer, int length)
 {
@@ -77,9 +83,10 @@ HitFeatures HitClassifier::extractFeatures(const juce::AudioBuffer<float>& buffe
     return f;
 }
 
-float HitClassifier::getDelta(const std::vector<float>& values, const std::vector<float>& volumes)
+float HitClassifier::getDelta(const std::vector<float>& values, const std::vector<float>& volumes, const std::vector<float>& avgEnergies)
 {
     const int intendedFrameCount = 6;
+    static constexpr float scalingFactor = 10.0f;
     // 1. Guard: Ensure vectors are valid, match in size, and have at least 6 frames
     const int numFrames = static_cast<int>(values.size());
     if (numFrames < intendedFrameCount || volumes.size() != values.size())
@@ -102,12 +109,14 @@ float HitClassifier::getDelta(const std::vector<float>& values, const std::vecto
     float sumY  = 0.0f;
     float sumXY = 0.0f;
     float sumXX = 0.0f;
+    float sumEnergies = 0.0f;
 
     // 4. Loop runs exactly 6 times starting at peakIndex
     for (int i = peakIndex; i < loopEnd; ++i)
     {
         float x = static_cast<float>(i - peakIndex); // x goes from 0.0 to 5.0
         float y = values[i];
+        sumEnergies += avgEnergies[i];
 
         DBG("value for delta: " << y << " at adjusted index x: " << x << " (original index: " << i << ")");
         
@@ -117,6 +126,8 @@ float HitClassifier::getDelta(const std::vector<float>& values, const std::vecto
         sumXX += x * x;
     }
 
+    int numIter = loopEnd - peakIndex;
+    sumEnergies /= static_cast<float>(numIter);
     // --- Mathematical DSP Insight ---
     // Because M is fixed at 6, and x is always [0, 1, 2, 3, 4, 5]:
     // - sumX is always 15.0f
@@ -127,8 +138,10 @@ float HitClassifier::getDelta(const std::vector<float>& values, const std::vecto
     if (std::abs(denominator) > 1e-5f)
     {
         float result = ((M * sumXY) - (sumX * sumY)) / denominator;
+        float energyWeight = std::log(sumEnergies);
         DBG("Dynamic start index: " << peakIndex << " | 6-frame delta: " << result);
-        return result;
+        DBG("Delta weight from total energy: " << energyWeight);
+        return scalingFactor * result * energyWeight;
     }
     
     return 0.0f;
@@ -279,7 +292,7 @@ HitType HitClassifier::classify(const HitFeatures& f, std::ofstream& csvFile)
 
             // C. Calculate Delta (Spectral Shift Direction: End - Start)
             //pooledFeatures.centroidDelta = getDelta(spectralCentroids);
-            pooledFeatures.centroidDelta = getDelta(lowMidCentroids, totalEnergies);
+            pooledFeatures.centroidDelta = getDelta(lowMidCentroids, totalEnergies, avgLowMidEnergies);
             
             pooledFeatures.lowDecayCentroid  = DrumFeatureExtractor::calculateTemporalCentroid(avgLowEnergies);
             pooledFeatures.highDecayCentroid = DrumFeatureExtractor::calculateTemporalCentroid(avgMidHighEnergies);

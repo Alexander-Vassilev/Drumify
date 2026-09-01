@@ -221,10 +221,61 @@ public:
     
     FFTProcessor fft;
     static PooledHitFeatures totalFeatures; // To find stats across all hits
+
+    /** The features written to the CSV, in column order. */
+    static constexpr int numTrackedFeatures = 5;
+    static const char* const trackedFeatureNames[numTrackedFeatures];
+
+    static std::array<double, numTrackedFeatures> toFeatureArray (const PooledHitFeatures& f)
+    {
+        return { f.meanCentroid, f.centroidDelta, f.topEndHeavyRatio,
+                 f.lowEndHeavyRatio, f.decayRatio };
+    }
+
+    /** Running mean and variance per feature, so a batch run can report spread
+        without holding every hit in memory. Uses Welford rather than summing
+        squares, which loses precision when the mean is far from zero.
+    */
+    struct FeatureStats
+    {
+        int count = 0;
+        std::array<double, numTrackedFeatures> means {};
+        std::array<double, numTrackedFeatures> m2 {};   // sum of squared deviations
+
+        void reset() { *this = {}; }
+
+        void add (const PooledHitFeatures& f)
+        {
+            const auto values = toFeatureArray (f);
+            ++count;
+
+            for (int i = 0; i < numTrackedFeatures; ++i)
+            {
+                const auto delta = values[i] - means[i];
+                means[i] += delta / (double) count;
+                m2[i] += delta * (values[i] - means[i]);
+            }
+        }
+
+        double mean (int i) const { return means[i]; }
+
+        /** Sample standard deviation; needs two hits to mean anything. */
+        double stdev (int i) const
+        {
+            if (count < 2)
+                return 0.0;
+
+            const auto variance = m2[i] / (double) (count - 1);
+            return variance > 0.0 ? std::sqrt (variance) : 0.0;
+        }
+    };
+
+    static FeatureStats batchStats;
+
 private:
     static float computeRMS(const juce::AudioBuffer<float>& buffer, int length);
     static float computeZeroCrossingRate(const juce::AudioBuffer<float>& buffer, int length);
-    static float getDelta(const std::vector<float>& values, const std::vector<float>& volumes);
+    static float getDelta(const std::vector<float>& values, const std::vector<float>& volumes, const std::vector<float>& avgEnergies);
     static double calculateGaussianPDF(double x, double mean, double stdev);
     static double calculateClassLikelihood(const PooledHitFeatures& f, const DrumClassParameters& params);
     static void increaseFeatureCount(PooledHitFeatures& f) {
@@ -233,7 +284,11 @@ private:
         HitClassifier::totalFeatures.topEndHeavyRatio += f.topEndHeavyRatio;
         HitClassifier::totalFeatures.lowEndHeavyRatio += f.lowEndHeavyRatio;
         HitClassifier::totalFeatures.decayRatio += f.decayRatio;
-        
+
+        // Every hit that gets a CSV row also lands here, so a batch run can
+        // summarise exactly the rows it appended.
+        HitClassifier::batchStats.add (f);
+
         std::cout << "total centroid: " << HitClassifier::totalFeatures.meanCentroid << std::endl;
     }
 };

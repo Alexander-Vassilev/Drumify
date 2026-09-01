@@ -903,7 +903,9 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
     };
 
     microphone.onRecordToggled = [this] { toggleRecording(); };
-    microphone.onUploadLoop    = [this] { loadDrumLoopFromDisk(); };
+    // Temporarily repurposed as the batch-analysis trigger. Loading a single
+    // loop is still reachable by dropping a file onto the window.
+    microphone.onUploadLoop    = [this] { batchAnalyseFolder(); };
 
     speakers.onZoneClicked = [this] (SpeakerComponent::Zone z)
     {
@@ -1086,6 +1088,78 @@ void HackBrownAudioProcessorEditor::showSettingsPopup()
 {
     juce::CallOutBox::launchAsynchronously (std::make_unique<SettingsPanel> (audioProcessor),
                                             plusButton.getBounds(), this);
+}
+
+// Dev tool. Absolute because a plugin binary has no reliable way back to the
+// repo; point this at whichever library you want to profile. Matches the style
+// of the CSV path InputProcessor's constructor opens.
+static const char* const batchAnalysisFolder =
+    "/Users/lightspark/Documents/JuceProjects/HackBrown2026/Data/Kicks";
+
+void HackBrownAudioProcessorEditor::batchAnalyseFolder()
+{
+    const juce::File folder { batchAnalysisFolder };
+
+    if (! folder.isDirectory())
+    {
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                                                "Folder not found",
+                                                juce::String (batchAnalysisFolder) + " is not a directory.");
+        return;
+    }
+
+    if (! audioProcessor.inputProcessor.csvFile.is_open())
+    {
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                                                "No CSV open",
+                                                "InputProcessor could not open its features CSV, so there is nowhere to write.");
+        return;
+    }
+
+    int processed = 0;
+
+    // Summarise only the hits this run produces, not any left over from earlier.
+    HitClassifier::batchStats.reset();
+
+    // Recursive, so the per-category subfolders under Data/Kicks are included.
+    // This runs on the message thread and the analyser is not safe to call from
+    // anywhere else, so the UI will be unresponsive until it finishes.
+    for (const auto& entry : juce::RangedDirectoryIterator (folder, true, "*.wav", juce::File::findFiles))
+    {
+        audioProcessor.processUploadedLoop (entry.getFile());
+        ++processed;
+    }
+
+    // The stream is buffered and stays open for the session, so without this the
+    // rows may not reach disk until the plugin closes.
+    audioProcessor.inputProcessor.csvFile.flush();
+
+    DBG ("Finished batch analysis of " << processed << " files.");
+
+    // std::cout rather than DBG so the summary survives a Release build, which
+    // is the one worth profiling a whole sample library with.
+    const auto& stats = HitClassifier::batchStats;
+
+    std::cout << "\n=== Batch feature summary ===\n"
+              << "Folder: " << folder.getFullPathName() << "\n"
+              << "Files:  " << processed << "    Hits: " << stats.count << "\n"
+              << std::left << std::setw (20) << "Feature"
+              << std::right << std::setw (12) << "Mean"
+              << std::setw (12) << "StdDev" << "\n"
+              << std::string (44, '-') << "\n"
+              << std::fixed << std::setprecision (4);
+
+    for (int i = 0; i < HitClassifier::numTrackedFeatures; ++i)
+        std::cout << std::left << std::setw (20) << HitClassifier::trackedFeatureNames[i]
+                  << std::right << std::setw (12) << stats.mean (i)
+                  << std::setw (12) << stats.stdev (i) << "\n";
+
+    std::cout << std::defaultfloat << std::endl;
+
+    juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon,
+                                            "Batch analysis finished",
+                                            "Analysed " + juce::String (processed) + " files from "
+                                              + folder.getFullPathName() + " and appended their features to the CSV.");
 }
 
 void HackBrownAudioProcessorEditor::loadDrumLoopFromDisk()
