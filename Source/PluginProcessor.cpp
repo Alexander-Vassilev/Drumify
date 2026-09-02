@@ -202,8 +202,23 @@ void HackBrownAudioProcessor::analyzeLoadedDrumLoop (const juce::AudioBuffer<flo
     
     const int totalSamples = loopBuffer.getNumSamples();
     const int chunkSize = getBlockSize();
-    
-    const float* totalInputData = loopBuffer.getReadPointer (0);
+
+    // Sum to mono rather than analysing channel 0 alone: anything panned hard to
+    // one side - a hat or ride off to one edge - would otherwise be missed
+    // entirely, and a file with a near-silent left channel would yield no onsets.
+    juce::AudioBuffer<float> monoBuffer (1, totalSamples);
+    monoBuffer.clear();
+
+    const int numChannels = loopBuffer.getNumChannels();
+
+    if (numChannels <= 0 || totalSamples <= 0)
+        return;
+
+    for (int channel = 0; channel < numChannels; ++channel)
+        monoBuffer.addFrom (0, 0, loopBuffer, channel, 0, totalSamples,
+                            1.0f / static_cast<float> (numChannels));
+
+    const float* totalInputData = monoBuffer.getReadPointer (0);
 
     for (int startSample = 0; startSample < totalSamples; startSample += chunkSize)
     {

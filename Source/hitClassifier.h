@@ -7,6 +7,11 @@
 struct MouthHit;
 static constexpr int stftMaxWindowCount = 300;
 
+// Window the transient ZCR is measured over, and where to start it when the
+// envelope follower finds no distinct spike.
+static constexpr int transientZcrWindowLength = 700;
+static constexpr int transientZcrFallbackStart = 300;
+
 enum class HitType
 {
     Kick = 36,
@@ -29,12 +34,14 @@ struct PooledHitFeatures
     float decayRatio = 0.0f;        // Low decay divided by High decay
 
     float deltaEnergyWeight = 0.0f; // The energy term getDelta scales its slope by
+    float transientZcr = 0.0f;      // zcr over a fixed window at the transient
 };
 
 struct HitFeatures
 {
     float rms = 0.0f;
-    float zcr = 0.0f;      // zero crossing rate
+    float zcr = 0.0f;      // zero crossing rate over the whole hit
+    float transientZcr = 0.0f;  // zcr over a fixed window at the transient
     float durationSec = 0.0f;
     // FFT data
     bool fftActive = true;
@@ -51,7 +58,8 @@ struct HitFeatures
 enum class FeatureDirection
 {
     twoSided,        // the usual bell: both extremes count against the class
-    higherIsBetter   // past the mean is no less characteristic, so no penalty
+    higherIsBetter,  // past the mean is no less characteristic, so no penalty
+    lowerIsBetter    // the mirror image: nothing below the mean is penalised
 };
 
 struct FeatureDistribution
@@ -68,6 +76,7 @@ struct FeatureWeights
     double topWeight      = 1.0;
     double lowWeight      = 1.0;
     double decayWeight    = 1.0;
+    double zcrWeight      = 1.0;
 };
 
 struct DrumClassParameters
@@ -77,6 +86,7 @@ struct DrumClassParameters
     FeatureDistribution topEndHeavy;
     FeatureDistribution lowEndHeavy;
     FeatureDistribution decayRatio;
+    FeatureDistribution transientZcr;
 
     FeatureWeights weights;
 };
@@ -101,13 +111,17 @@ const DrumClassParameters hatParams {
     { 14.0007, 23.2583, FeatureDirection::higherIsBetter },  // TopEndHeavyRatio
     { 0.4520,  0.3882 },   // LowEndHeavyRatio
     { 0.9771,  0.1869 },   // HighLowDecayRatio
+    // Crossing rate is the clearest separator hats have: 0.38 against 0.09 for
+    // snares and 0.02 for kicks. Nothing is too busy to be a hat.
+    { 0.3805,  0.0945, FeatureDirection::higherIsBetter },  // TransientZCR
 
     {
         0.0,  // centroidWeight
         1.3,  // deltaWeight
         1.0,  // topWeight
         0.6,  // lowWeight
-        0.5   // decayWeight - hat and snare decay overlap, so weight it lightly
+        0.5,  // decayWeight - hat and snare decay overlap, so weight it lightly
+        1.0   // zcrWeight
     }
 };
 
@@ -119,13 +133,17 @@ const DrumClassParameters kickParams {
     // distribution has a long right tail a two-sided bell would punish.
     { 196.2752, 424.9242, FeatureDirection::higherIsBetter },
     { 2.5298,   1.8810 },
+    // The mirror of the hat case: a kick cannot cross zero too rarely, so only
+    // rates above the mean count against it.
+    { 0.0165,   0.0307, FeatureDirection::lowerIsBetter },  // TransientZCR
 
     {
         0.6,  // centroidWeight
         1,    // deltaWeight
         0.05, // topWeight
         1.0,  // lowWeight
-        1.0   // decayWeight - the one feature that cleanly separates kicks
+        1.0,  // decayWeight - the one feature that cleanly separates kicks
+        1.0   // zcrWeight
     }
 };
 
@@ -135,13 +153,17 @@ const DrumClassParameters snareParams {
     { 1.4982,  1.0838 },
     { 1.5298,  1.4059 },
     { 0.8710,  0.2631 },
+    // Two-sided: snares sit between the other two, so straying in either
+    // direction is evidence against, not for.
+    { 0.0907,  0.0573 },  // TransientZCR
 
     {
         1,    // centroidWeight
         1.0,  // deltaWeight
         1.2,  // topWeight
         0.7,  // lowWeight
-        0.5   // decayWeight - overlaps the hat distribution
+        0.5,  // decayWeight - overlaps the hat distribution
+        1.0   // zcrWeight
     }
 };
 
@@ -255,13 +277,13 @@ public:
     /** The features a batch run reports mean and standard deviation for, in the
         same order as the CSV's value columns.
     */
-    static constexpr int numTrackedFeatures = 6;
+    static constexpr int numTrackedFeatures = 7;
     static const char* const trackedFeatureNames[numTrackedFeatures];
 
     static std::array<double, numTrackedFeatures> toFeatureArray (const PooledHitFeatures& f)
     {
         return { f.meanCentroid, f.centroidDelta, f.topEndHeavyRatio,
-                 f.lowEndHeavyRatio, f.decayRatio, f.deltaEnergyWeight };
+                 f.lowEndHeavyRatio, f.decayRatio, f.deltaEnergyWeight, f.transientZcr };
     }
 
     /** Running mean and variance per feature, so a batch run can report spread
@@ -307,6 +329,17 @@ public:
 private:
     static float computeRMS(const juce::AudioBuffer<float>& buffer, int length);
     static float computeZeroCrossingRate(const juce::AudioBuffer<float>& buffer, int length);
+
+    /** Zero crossing rate over [startSample, endSample). */
+    static float computeZeroCrossingRateInRange(const juce::AudioBuffer<float>& buffer,
+                                                int startSample, int endSample);
+
+    /** Where the hit's transient begins, found with an envelope follower over the
+        already-extracted hit. Returns transientZcrFallbackStart when the envelope
+        never rises - a hit segmented out of a sustained passage is already loud at
+        sample 0, so there is no spike to lock onto.
+    */
+    static int findTransientStart(const juce::AudioBuffer<float>& buffer, int length, double sampleRate);
     /** Returns the energy-weighted 6-frame centroid slope. The unweighted
         energy term is reported through `energyWeightOut` when supplied, so it
         can be profiled in its own right.
@@ -322,6 +355,7 @@ private:
         HitClassifier::totalFeatures.lowEndHeavyRatio += f.lowEndHeavyRatio;
         HitClassifier::totalFeatures.decayRatio += f.decayRatio;
         HitClassifier::totalFeatures.deltaEnergyWeight += f.deltaEnergyWeight;
+        HitClassifier::totalFeatures.transientZcr += f.transientZcr;
 
         // Every hit that gets a CSV row also lands here, so a batch run can
         // summarise exactly the rows it appended.

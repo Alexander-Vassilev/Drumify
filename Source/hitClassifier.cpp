@@ -8,7 +8,7 @@ HitClassifier::FeatureStats HitClassifier::batchStats {};
 const char* const HitClassifier::trackedFeatureNames[HitClassifier::numTrackedFeatures]
 {
     "MeanCentroid", "Delta", "TopEndHeavyRatio", "LowEndHeavyRatio", "HighLowDecayRatio",
-    "EnergyWeight"
+    "EnergyWeight", "TransientZCR"
 };
 
 float HitClassifier::computeRMS(const juce::AudioBuffer<float>& buffer, int length)
@@ -49,6 +49,104 @@ float HitClassifier::computeZeroCrossingRate(const juce::AudioBuffer<float>& buf
     return (float)crossings / (float)length;
 }
 
+float HitClassifier::computeZeroCrossingRateInRange(const juce::AudioBuffer<float>& buffer,
+                                                    int startSample, int endSample)
+{
+    endSample = juce::jmin(endSample, buffer.getNumSamples());
+    startSample = juce::jmax(0, startSample);
+
+    const int span = endSample - startSample;
+
+    if (span <= 1)
+        return 0.0f;
+
+    const float* data = buffer.getReadPointer(0);
+    int crossings = 0;
+
+    for (int i = startSample + 1; i < endSample; ++i)
+    {
+        const float a = data[i - 1];
+        const float b = data[i];
+
+        if ((a >= 0.0f && b < 0.0f) || (a < 0.0f && b >= 0.0f))
+            crossings++;
+    }
+
+    // Normalised by the window actually measured, so a truncated window at the
+    // end of a short hit stays comparable with a full one.
+    return (float)crossings / (float)span;
+}
+
+int HitClassifier::findTransientStart(const juce::AudioBuffer<float>& buffer, int length, double sampleRate)
+{
+    length = juce::jmin(length, buffer.getNumSamples());
+
+    if (length <= 1)
+        return transientZcrFallbackStart;
+
+    const double rate = sampleRate > 0.0 ? sampleRate : 44100.0;
+
+    // Fast attack to catch the strike, slower release so the envelope does not
+    // collapse between samples of a waveform's own cycle.
+    const float attackCoeff  = (float)std::exp(-1.0 / (0.001 * rate));
+    const float releaseCoeff = (float)std::exp(-1.0 / (0.020 * rate));
+
+    const float* data = buffer.getReadPointer(0);
+
+    const auto stepEnvelope = [&](float env, float rectified)
+    {
+        const float coeff = rectified > env ? attackCoeff : releaseCoeff;
+        return coeff * (env - rectified) + rectified;
+    };
+
+    // Pass 1: the hit's peak envelope, which sets the threshold.
+    float env = 0.0f;
+    float peakEnv = 0.0f;
+
+    for (int i = 0; i < length; ++i)
+    {
+        env = stepEnvelope(env, std::abs(data[i]));
+        peakEnv = juce::jmax(peakEnv, env);
+    }
+
+    if (peakEnv <= 1.0e-6f)
+        return transientZcrFallbackStart;
+
+    // A hit that is already loud where it begins was separated spectrally rather
+    // than by amplitude, so it has no spike to find. The envelope alone cannot
+    // tell us this - it starts from zero and so always appears to rise - hence
+    // comparing the raw level at the head of the hit against its overall peak.
+    const int headLength = juce::jmin(length, 128);
+    float headPeak = 0.0f;
+
+    for (int i = 0; i < headLength; ++i)
+        headPeak = juce::jmax(headPeak, std::abs(data[i]));
+
+    if (headPeak >= peakEnv * 0.5f)
+        return transientZcrFallbackStart;
+
+    // Pass 2: the first crossing of half the peak. Recomputed rather than stored
+    // so this stays allocation-free per hit.
+    const float threshold = peakEnv * 0.5f;
+
+    env = 0.0f;
+
+    for (int i = 0; i < length; ++i)
+    {
+        env = stepEnvelope(env, std::abs(data[i]));
+
+        if (env >= threshold)
+        {
+            // Already above threshold at the very first sample means the hit was
+            // carved out of sustained material and never actually rose - there is
+            // no transient here to anchor the window to.
+            return i > 0 ? i : transientZcrFallbackStart;
+        }
+    }
+
+    return transientZcrFallbackStart;
+}
+
 /*std::vector<std::vector<juce::dsp::Complex<float>>> HitClassifier::getSTFT(const juce::AudioBuffer<float>& buffer, int length) {
     for (int i = 0; i < length - fftSize; i += hopSize) {
         
@@ -61,6 +159,15 @@ HitFeatures HitClassifier::extractFeatures(const juce::AudioBuffer<float>& buffe
     f.rms = computeRMS(buffer, length);
     f.zcr = computeZeroCrossingRate(buffer, length);
     f.durationSec = (sampleRate > 0.0) ? (float)length / (float)sampleRate : 0.0f;
+
+    // ZCR over a fixed window anchored at the transient, so every hit is measured
+    // over the same stretch of its attack regardless of how much silence the
+    // onset detector left in front of it. Truncated by the range helper when the
+    // hit ends before the window does.
+    const int transientStart = findTransientStart(buffer, length, sampleRate);
+    DBG("ZCR calc starts: " << transientStart);
+    f.transientZcr = computeZeroCrossingRateInRange(buffer, transientStart,
+                                                    transientStart + transientZcrWindowLength);
     
     DBG("length: " << f.durationSec);
     
@@ -183,6 +290,8 @@ double HitClassifier::calculateGaussianPDF(double x, const FeatureDistribution& 
     // flattens the curve above the mean rather than shifting it.
     if (dist.direction == FeatureDirection::higherIsBetter)
         z = std::min(z, 0.0);
+    else if (dist.direction == FeatureDirection::lowerIsBetter)
+        z = std::max(z, 0.0);
 
     double exponent = -(z * z) / 2.0;
     double coefficient = 1.0 / (stdev * std::sqrt(2.0 * juce::MathConstants<double>::pi));
@@ -197,16 +306,18 @@ double HitClassifier::calculateClassLikelihood(const PooledHitFeatures& f, const
     double pTop      = calculateGaussianPDF(f.topEndHeavyRatio, params.topEndHeavy);
     double pLow      = calculateGaussianPDF(f.lowEndHeavyRatio, params.lowEndHeavy);
     double pDecay    = calculateGaussianPDF(f.decayRatio,       params.decayRatio);
+    double pZcr      = calculateGaussianPDF(f.transientZcr,     params.transientZcr);
 
     pCentroid = std::min(1.0, pCentroid);
     pDelta    = std::min(1.0, pDelta);
     pTop      = std::min(1.0, pTop);
     pLow      = std::min(1.0, pLow);
     pDecay    = std::min(1.0, pDecay);
+    pZcr      = std::min(1.0, pZcr);
 
     DBG (juce::String::formatted (
-        "pCentroid: %-6.2f | pDelta: %-6.2f | pTopEndHeavyRatio: %-6.2f | pLowEndHeavyRatio: %-6.2f | pHighLowDecayRatio: %-6.2f",
-        pCentroid, pDelta, pTop, pLow, pDecay
+        "pCentroid: %-6.2f | pDelta: %-6.2f | pTopEndHeavyRatio: %-6.2f | pLowEndHeavyRatio: %-6.2f | pHighLowDecayRatio: %-6.2f | pTransientZCR: %-6.2f",
+        pCentroid, pDelta, pTop, pLow, pDecay, pZcr
     ));
 
     double wCentroid = std::pow(pCentroid, params.weights.centroidWeight);
@@ -214,9 +325,10 @@ double HitClassifier::calculateClassLikelihood(const PooledHitFeatures& f, const
     double wTop      = std::pow(pTop,      params.weights.topWeight);
     double wLow      = std::pow(pLow,      params.weights.lowWeight);
     double wDecay    = std::pow(pDecay,    params.weights.decayWeight);
+    double wZcr      = std::pow(pZcr,      params.weights.zcrWeight);
 
     // Naive Bayes Assumption: Multiply the independent feature probabilities together
-    return wCentroid * wDelta * wTop * wLow * wDecay;
+    return wCentroid * wDelta * wTop * wLow * wDecay * wZcr;
 }
 
 // Heuristic classification:
@@ -354,6 +466,10 @@ HitType HitClassifier::classify(const HitFeatures& f, std::ofstream& csvFile)
             pooledFeatures.highDecayCentroid = DrumFeatureExtractor::calculateTemporalCentroid(avgMidHighEnergies);
             
             pooledFeatures.decayRatio = pooledFeatures.lowDecayCentroid / (pooledFeatures.highDecayCentroid + 1e-5f);
+
+            // Time-domain, so it is carried straight across from extractFeatures
+            // rather than pooled over the STFT frames.
+            pooledFeatures.transientZcr = f.transientZcr;
             
             DBG (juce::String::formatted (
                 "Decay -> Lows: %-5.2f | Highs: %-5.2f | Ratio (L/H): %-5.2f",
@@ -384,7 +500,8 @@ HitType HitClassifier::classify(const HitFeatures& f, std::ofstream& csvFile)
                     << pooledFeatures.topEndHeavyRatio << ","
                     << pooledFeatures.lowEndHeavyRatio << ","
                     << pooledFeatures.decayRatio << ","
-                    << pooledFeatures.deltaEnergyWeight << std::endl;
+                    << pooledFeatures.deltaEnergyWeight << ","
+                    << pooledFeatures.transientZcr << std::endl;
         }
         
         DBG("Hat Probabilities:");
