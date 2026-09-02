@@ -96,6 +96,11 @@ float HitClassifier::getDelta(const std::vector<float>& values, const std::vecto
                               float* energyWeightOut)
 {
     const int intendedFrameCount = 6;
+
+    // Measured from a fixed frame rather than wherever the loudest frame landed:
+    // the attack is over by frame 3, so this compares the same part of every hit
+    // regardless of how the peak amplitude fell.
+    const int startFrame = 3;
     static constexpr float scalingFactor = 10.0f;
 
     if (energyWeightOut != nullptr)
@@ -103,21 +108,18 @@ float HitClassifier::getDelta(const std::vector<float>& values, const std::vecto
 
     // 1. Guard: Ensure vectors are valid, match in size, and have at least 6 frames
     const int numFrames = static_cast<int>(values.size());
-    if (numFrames < intendedFrameCount || volumes.size() != values.size())
+    if (numFrames < intendedFrameCount
+         || volumes.size() != values.size()
+         || avgEnergies.size() != values.size())
         return 0.0f;
 
-    // 2. Find the peak of the volume (energy) in the first 9 frames
-    int searchLimit = std::min(numFrames, 9);
-    auto maxIt = std::max_element(volumes.begin(), volumes.begin() + searchLimit);
-    int peakIndex = static_cast<int>(std::distance(volumes.begin(), maxIt));
-    
-    // 3. Clamp peakIndex so we can always fit exactly 6 frames [C++17 std::clamp]
-    // The maximum possible starting index is (numFrames - 6)
-    peakIndex = std::clamp(peakIndex, 0, numFrames - intendedFrameCount);
-    DBG("start index for delta finding: " << peakIndex);
+    // 2. Clamp so a hit too short to reach frame 3 still yields 6 frames.
+    const int startIndex = std::clamp(startFrame, 0, numFrames - intendedFrameCount);
+    DBG("start index for delta finding: " << startIndex);
+
     // Constant parameters for exactly 6 iterations
     const float M = static_cast<float>(intendedFrameCount);
-    const int loopEnd = peakIndex + intendedFrameCount;
+    const int loopEnd = startIndex + intendedFrameCount;
 
     float sumX  = 0.0f;
     float sumY  = 0.0f;
@@ -125,10 +127,10 @@ float HitClassifier::getDelta(const std::vector<float>& values, const std::vecto
     float sumXX = 0.0f;
     float sumEnergies = 0.0f;
 
-    // 4. Loop runs exactly 6 times starting at peakIndex
-    for (int i = peakIndex; i < loopEnd; ++i)
+    // 4. Loop runs exactly 6 times starting at startIndex
+    for (int i = startIndex; i < loopEnd; ++i)
     {
-        float x = static_cast<float>(i - peakIndex); // x goes from 0.0 to 5.0
+        float x = static_cast<float>(i - startIndex); // x goes from 0.0 to 5.0
         float y = values[i];
         sumEnergies += avgEnergies[i];
 
@@ -140,7 +142,7 @@ float HitClassifier::getDelta(const std::vector<float>& values, const std::vecto
         sumXX += x * x;
     }
 
-    int numIter = loopEnd - peakIndex;
+    int numIter = loopEnd - startIndex;
     sumEnergies /= static_cast<float>(numIter);
     // --- Mathematical DSP Insight ---
     // Because M is fixed at 6, and x is always [0, 1, 2, 3, 4, 5]:
@@ -153,7 +155,7 @@ float HitClassifier::getDelta(const std::vector<float>& values, const std::vecto
     {
         float result = ((M * sumXY) - (sumX * sumY)) / denominator;
         float energyWeight = 2 * (std::log(sumEnergies) - 2.9);
-        DBG("Dynamic start index: " << peakIndex << " | 6-frame delta: " << result);
+        DBG("Start index: " << startIndex << " | 6-frame delta: " << result);
         DBG("Delta weight from total energy: " << energyWeight);
 
         if (energyWeightOut != nullptr)
@@ -166,43 +168,55 @@ float HitClassifier::getDelta(const std::vector<float>& values, const std::vecto
     return 0.0f;
 }
 
-double HitClassifier::calculateGaussianPDF(double x, double mean, double stdev)
+double HitClassifier::calculateGaussianPDF(double x, const FeatureDistribution& dist)
 {
     // Avoid division by zero
+    double stdev = dist.stdev;
+
     if (stdev <= 0.0)
         stdev = 1e-5;
-    
-    double exponent = -std::pow(x - mean, 2.0) / (2.0 * std::pow(stdev, 2.0));
+
+    double z = (x - dist.mean) / stdev;
+
+    // One-sided: for monotonic evidence, everything past the mean is at least as
+    // characteristic of the class, so the falloff applies on one side only. This
+    // flattens the curve above the mean rather than shifting it.
+    if (dist.direction == FeatureDirection::higherIsBetter)
+        z = std::min(z, 0.0);
+
+    double exponent = -(z * z) / 2.0;
     double coefficient = 1.0 / (stdev * std::sqrt(2.0 * juce::MathConstants<double>::pi));
-    
+
     return coefficient * std::exp(exponent);
 }
 
 double HitClassifier::calculateClassLikelihood(const PooledHitFeatures& f, const DrumClassParameters& params)
 {
-    double pCentroid = calculateGaussianPDF(f.meanCentroid,     params.meanCentroid.mean, params.meanCentroid.stdev);
-    double pDelta    = calculateGaussianPDF(f.centroidDelta,    params.delta.mean,        params.delta.stdev);
-    double pTop      = calculateGaussianPDF(f.topEndHeavyRatio, params.topEndHeavy.mean,  params.topEndHeavy.stdev);
-    double pLow      = calculateGaussianPDF(f.lowEndHeavyRatio, params.lowEndHeavy.mean,  params.lowEndHeavy.stdev);
+    double pCentroid = calculateGaussianPDF(f.meanCentroid,     params.meanCentroid);
+    double pDelta    = calculateGaussianPDF(f.centroidDelta,    params.delta);
+    double pTop      = calculateGaussianPDF(f.topEndHeavyRatio, params.topEndHeavy);
+    double pLow      = calculateGaussianPDF(f.lowEndHeavyRatio, params.lowEndHeavy);
+    double pDecay    = calculateGaussianPDF(f.decayRatio,       params.decayRatio);
 
     pCentroid = std::min(1.0, pCentroid);
     pDelta    = std::min(1.0, pDelta);
     pTop      = std::min(1.0, pTop);
     pLow      = std::min(1.0, pLow);
-    
+    pDecay    = std::min(1.0, pDecay);
+
     DBG (juce::String::formatted (
-        "pCentroid: %-6.2f | pDelta: %-6.2f | pTopEndHeavyRatio: %-6.2f | pLowEndHeavyRatio: %-6.2f",
-        pCentroid, pDelta, pTop, pLow
+        "pCentroid: %-6.2f | pDelta: %-6.2f | pTopEndHeavyRatio: %-6.2f | pLowEndHeavyRatio: %-6.2f | pHighLowDecayRatio: %-6.2f",
+        pCentroid, pDelta, pTop, pLow, pDecay
     ));
-    
+
     double wCentroid = std::pow(pCentroid, params.weights.centroidWeight);
     double wDelta    = std::pow(pDelta,    params.weights.deltaWeight);
     double wTop      = std::pow(pTop,      params.weights.topWeight);
     double wLow      = std::pow(pLow,      params.weights.lowWeight);
-    
+    double wDecay    = std::pow(pDecay,    params.weights.decayWeight);
+
     // Naive Bayes Assumption: Multiply the independent feature probabilities together
-    return wCentroid * wDelta * wTop * wLow;
-    //return pCentroid * pDelta * pTop * pLow;
+    return wCentroid * wDelta * wTop * wLow * wDecay;
 }
 
 // Heuristic classification:
@@ -270,27 +284,49 @@ HitType HitClassifier::classify(const HitFeatures& f, std::ofstream& csvFile)
         // 3. Pool values over time
         float centroidSum = 0.0f;
         float prominenceSum = 0.0f;
-        int topEndHeavyCount = 0;
-        int lowEndHeavyCount = 0;
+
+        // Mean of the per-frame band ratios rather than a count of frames that
+        // merely exceed mid: high sitting at twice mid on every frame now reads
+        // as 2.0, so the magnitude of the imbalance survives, not just its sign.
+        float topEndRatioSum = 0.0f;
+        float lowEndRatioSum = 0.0f;
+        int topEndRatioFrames = 0;
+        int lowEndRatioFrames = 0;
+
+        // Frames whose mid band is silent would divide by ~0 and swamp the mean,
+        // so they are left out of the average entirely.
+        constexpr float minMidEnergy = 1.0e-6f;
+
         const int numFramesConsiderTopEndHeavy = std::min(9, analysisLen);
         const int numFramesConsiderLowEndHeavy = std::min(30, analysisLen);
-        
+
         for (int i = 0; i < analysisLen; ++i) {
             centroidSum += spectralCentroids[i];
             prominenceSum += prominences[i];
             //DBG("Low avg nrg: " << avgLowEnergies[i]);
             //DBG("Mid avg nrg: " << avgMidEnergies[i]);
             //DBG("High avg nrg: " << avgHighEnergies[i]);
-            
-            // Only considering first 8 windows
-            if ((avgHighEnergies[i] > avgMidEnergies[i]) && (i < numFramesConsiderTopEndHeavy)) topEndHeavyCount++;
-            if ((avgLowEnergies[i] > avgMidEnergies[i]) && (i < numFramesConsiderLowEndHeavy)) lowEndHeavyCount++;
+
+            if (avgMidEnergies[i] <= minMidEnergy)
+                continue;
+
+            if (i < numFramesConsiderTopEndHeavy)
+            {
+                topEndRatioSum += avgHighEnergies[i] / avgMidEnergies[i];
+                ++topEndRatioFrames;
+            }
+
+            if (i < numFramesConsiderLowEndHeavy)
+            {
+                lowEndRatioSum += avgLowEnergies[i] / avgMidEnergies[i];
+                ++lowEndRatioFrames;
+            }
         }
-        
+
         pooledFeatures.meanCentroid = centroidSum / static_cast<float>(analysisLen);
         pooledFeatures.meanLowMidProminence = prominenceSum / static_cast<float>(analysisLen);
-        pooledFeatures.topEndHeavyRatio = static_cast<float>(topEndHeavyCount) / static_cast<float>(numFramesConsiderTopEndHeavy);
-        pooledFeatures.lowEndHeavyRatio = static_cast<float>(lowEndHeavyCount) / static_cast<float>(numFramesConsiderLowEndHeavy);
+        pooledFeatures.topEndHeavyRatio = topEndRatioFrames > 0 ? topEndRatioSum / static_cast<float>(topEndRatioFrames) : 0.0f;
+        pooledFeatures.lowEndHeavyRatio = lowEndRatioFrames > 0 ? lowEndRatioSum / static_cast<float>(lowEndRatioFrames) : 0.0f;
         
         if (!spectralCentroids.empty())
         {

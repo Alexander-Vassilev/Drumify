@@ -1103,16 +1103,34 @@ namespace
         const char* label;
         const char* folder;   // relative to batchAnalysisRoot
         const char* csv;      // ditto
+        HitType expected;     // the folder name is the ground truth label
     };
 
     const BatchTarget batchTargets[]
     {
         // CSVs sit beside the sample folders in Data/, matching the path
         // InputProcessor's constructor opens.
-        { "KICK",  "Data/Kicks",  "Data/kickstats.csv"  },
-        { "SNARE", "Data/Snares", "Data/snarestats.csv" },
-        { "HAT",   "Data/Hats",   "Data/hatstats.csv"   }
+        { "KICK",  "Data/Kicks",  "Data/kickstats.csv",  HitType::Kick  },
+        { "SNARE", "Data/Snares", "Data/snarestats.csv", HitType::Snare },
+        { "HAT",   "Data/Hats",   "Data/hatstats.csv",   HitType::Hat   }
     };
+
+    // Prediction tallies, so a sweep over a labelled folder doubles as one row of
+    // a confusion matrix.
+    enum { predKick = 0, predSnare, predHat, predUnknown, numPredClasses };
+
+    const char* const predictionNames[numPredClasses] { "Kick", "Snare", "Hat", "Unknown" };
+
+    int predictionIndex (HitType type)
+    {
+        switch (type)
+        {
+            case HitType::Kick:  return predKick;
+            case HitType::Snare: return predSnare;
+            case HitType::Hat:   return predHat;
+            default:             return predUnknown;
+        }
+    }
 
     /** A finished run, kept so every drum type can be reported together once the
         whole sweep is done rather than scattered through the per-file logging.
@@ -1124,6 +1142,14 @@ namespace
         juce::File csv;
         int filesProcessed = 0;
         HitClassifier::FeatureStats stats;
+
+        int expected = predUnknown;
+        std::array<int, numPredClasses> predictions {};
+
+        int predictedTotal() const
+        {
+            return std::accumulate (predictions.begin(), predictions.end(), 0);
+        }
     };
 
     /** std::cout rather than DBG so the summary survives a Release build, which
@@ -1149,6 +1175,53 @@ namespace
                       << std::setw (12) << stats.stdev (i) << "\n";
 
         std::cout << std::defaultfloat << std::endl;
+    }
+
+    /** How each labelled folder's hits were actually classified. The diagonal is
+        correct predictions, so everything off it is a confusion to chase.
+    */
+    void printConfusionMatrix (const std::vector<BatchResult>& results)
+    {
+        if (results.empty())
+            return;
+
+        std::cout << "\n=============== CONFUSION MATRIX ===============\n"
+                  << std::left << std::setw (10) << "Actual";
+
+        for (int i = 0; i < numPredClasses; ++i)
+            std::cout << std::right << std::setw (9) << predictionNames[i];
+
+        std::cout << std::right << std::setw (9) << "Total"
+                  << std::setw (10) << "Correct" << "\n"
+                  << std::string (66, '-') << "\n";
+
+        int totalHits = 0;
+        int totalCorrect = 0;
+
+        for (const auto& result : results)
+        {
+            const int hits = result.predictedTotal();
+            const int correct = result.predictions[result.expected];
+
+            totalHits += hits;
+            totalCorrect += correct;
+
+            std::cout << std::left << std::setw (10) << result.label;
+
+            for (int i = 0; i < numPredClasses; ++i)
+                std::cout << std::right << std::setw (9) << result.predictions[i];
+
+            std::cout << std::right << std::setw (9) << hits << std::setw (9)
+                      << std::fixed << std::setprecision (1)
+                      << (hits > 0 ? 100.0 * correct / hits : 0.0) << "%"
+                      << std::defaultfloat << "\n";
+        }
+
+        std::cout << std::string (66, '-') << "\n"
+                  << "Overall accuracy: " << std::fixed << std::setprecision (1)
+                  << (totalHits > 0 ? 100.0 * totalCorrect / totalHits : 0.0) << "%"
+                  << "  (" << totalCorrect << "/" << totalHits << ")"
+                  << std::defaultfloat << std::endl;
     }
 }
 
@@ -1191,6 +1264,7 @@ void HackBrownAudioProcessorEditor::batchAnalyseFolder()
         HitClassifier::totalFeatures = {};
 
         int processed = 0;
+        std::array<int, numPredClasses> predictions {};
 
         // Recursive, so the per-category subfolders are included. This runs on
         // the message thread and the analyser is not safe to call from anywhere
@@ -1199,6 +1273,11 @@ void HackBrownAudioProcessorEditor::batchAnalyseFolder()
         {
             audioProcessor.processUploadedLoop (entry.getFile());
             ++processed;
+
+            // classifyStoredHits clears the vector per file, so this holds just
+            // the hits found in the file that was processed above.
+            for (const auto& hit : audioProcessor.inputProcessor.classifiedHits)
+                ++predictions[predictionIndex (hit.type)];
         }
 
         // The stream is buffered, so without this the rows may not reach disk
@@ -1207,7 +1286,8 @@ void HackBrownAudioProcessorEditor::batchAnalyseFolder()
 
         // Snapshot the accumulator: the next target resets it, and everything is
         // reported together once the whole sweep has finished.
-        results.push_back ({ target.label, folder, csv, processed, HitClassifier::batchStats });
+        results.push_back ({ target.label, folder, csv, processed, HitClassifier::batchStats,
+                             predictionIndex (target.expected), predictions });
 
         summary.add (juce::String (target.label) + ": " + juce::String (processed) + " files, "
                        + juce::String (HitClassifier::batchStats.count) + " hits -> " + csv.getFileName());
@@ -1215,6 +1295,8 @@ void HackBrownAudioProcessorEditor::batchAnalyseFolder()
 
     for (const auto& result : results)
         printBatchStats (result.label, result.folder, result.csv, result.filesProcessed, result.stats);
+
+    printConfusionMatrix (results);
 
     juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon,
                                             "Batch analysis finished",

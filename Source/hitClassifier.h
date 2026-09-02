@@ -44,10 +44,21 @@ struct HitFeatures
 };
 
 // --- 1. Structs for Parametric Distributions ---
+
+/** Whether a feature is characteristic of a class at a particular value, or is
+    monotonic evidence for it.
+*/
+enum class FeatureDirection
+{
+    twoSided,        // the usual bell: both extremes count against the class
+    higherIsBetter   // past the mean is no less characteristic, so no penalty
+};
+
 struct FeatureDistribution
 {
     double mean;
     double stdev;
+    FeatureDirection direction = FeatureDirection::twoSided;
 };
 
 struct FeatureWeights
@@ -56,6 +67,7 @@ struct FeatureWeights
     double deltaWeight    = 1.0;
     double topWeight      = 1.0;
     double lowWeight      = 1.0;
+    double decayWeight    = 1.0;
 };
 
 struct DrumClassParameters
@@ -64,7 +76,8 @@ struct DrumClassParameters
     FeatureDistribution delta;
     FeatureDistribution topEndHeavy;
     FeatureDistribution lowEndHeavy;
-    
+    FeatureDistribution decayRatio;
+
     FeatureWeights weights;
 };
 
@@ -75,45 +88,60 @@ struct ClassificationResult
     double snareProbability; // 0.0 to 100.0%
 };
 
+// Means and standard deviations below are measured, not hand-tuned: they come
+// from batchAnalyseFolder over Data/Hats (133 hits), Data/Kicks (273) and
+// Data/Snares (260). Re-run the sweep and update these together whenever a
+// feature's definition changes, or they will describe the old scale.
+
 const DrumClassParameters hatParams {
-    { 17.5, 1.66 },    // Mean Centroid
-    { -0.997, 2.98 },  // Delta
-    { 0.970, 0.103 },  // TopEndHeavyRatio
-    { 0.117, 0.223 },  // LowEndHeavyRatio
-    
+    { 17.2599, 1.6477 },   // Mean Centroid
+    { -0.0023, 1.3483 },   // Delta
+    // The brighter the hit, the more hat-like - there is no such thing as too
+    // much top end here, so values above the mean are not penalised.
+    { 14.0007, 23.2583, FeatureDirection::higherIsBetter },  // TopEndHeavyRatio
+    { 0.4520,  0.3882 },   // LowEndHeavyRatio
+    { 0.9771,  0.1869 },   // HighLowDecayRatio
+
     {
         0.0,  // centroidWeight
         1.3,  // deltaWeight
         1.0,  // topWeight
-        0.6   // lowWeight
+        0.6,  // lowWeight
+        0.5   // decayWeight - hat and snare decay overlap, so weight it lightly
     }
 };
 
 const DrumClassParameters kickParams {
-    { 3.75, 2.74 },
-    { -9.67, 8.21 },
-    { 0.200, 0.286 },
-    { 0.967, 0.0579 },
-    
+    { 3.6331,   2.7335 },
+    { -1.4477,  1.7798 },
+    { 0.8077,   0.9236 },
+    // Likewise the more the low end dominates, the more kick-like - and this
+    // distribution has a long right tail a two-sided bell would punish.
+    { 196.2752, 424.9242, FeatureDirection::higherIsBetter },
+    { 2.5298,   1.8810 },
+
     {
         0.6,  // centroidWeight
-        1,  // deltaWeight
-        0.05,  // topWeight
-        1.0   // lowWeight
+        1,    // deltaWeight
+        0.05, // topWeight
+        1.0,  // lowWeight
+        1.0   // decayWeight - the one feature that cleanly separates kicks
     }
 };
 
 const DrumClassParameters snareParams {
-    { 12.8, 2.05 },
-    { -7.83, 11.52 },
-    { 0.545, 0.392 },
-    { 0.494, 0.337 },
-    
+    { 12.5936, 1.9702 },
+    { -0.3599, 2.3162 },
+    { 1.4982,  1.0838 },
+    { 1.5298,  1.4059 },
+    { 0.8710,  0.2631 },
+
     {
-        1,  // centroidWeight
+        1,    // centroidWeight
         1.0,  // deltaWeight
         1.2,  // topWeight
-        1.2   // lowWeight
+        0.7,  // lowWeight
+        0.5   // decayWeight - overlaps the hat distribution
     }
 };
 
@@ -285,7 +313,7 @@ private:
     */
     static float getDelta(const std::vector<float>& values, const std::vector<float>& volumes, const std::vector<float>& avgEnergies,
                           float* energyWeightOut = nullptr);
-    static double calculateGaussianPDF(double x, double mean, double stdev);
+    static double calculateGaussianPDF(double x, const FeatureDistribution& dist);
     static double calculateClassLikelihood(const PooledHitFeatures& f, const DrumClassParameters& params);
     static void increaseFeatureCount(PooledHitFeatures& f) {
         HitClassifier::totalFeatures.meanCentroid += f.meanCentroid;
