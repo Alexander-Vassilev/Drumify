@@ -7,7 +7,8 @@ HitClassifier::FeatureStats HitClassifier::batchStats {};
 
 const char* const HitClassifier::trackedFeatureNames[HitClassifier::numTrackedFeatures]
 {
-    "MeanCentroid", "Delta", "TopEndHeavyRatio", "LowEndHeavyRatio", "HighLowDecayRatio"
+    "MeanCentroid", "Delta", "TopEndHeavyRatio", "LowEndHeavyRatio", "HighLowDecayRatio",
+    "EnergyWeight"
 };
 
 float HitClassifier::computeRMS(const juce::AudioBuffer<float>& buffer, int length)
@@ -67,13 +68,21 @@ HitFeatures HitClassifier::extractFeatures(const juce::AudioBuffer<float>& buffe
         f.fftActive = false;
     } else {
         auto* inputData = buffer.getReadPointer(0);
-        int numSamples = length;
-        
+        int numSamples = juce::jmin(length, buffer.getNumSamples());
+
+        // Scale the hit up to 0 dBFS for the FFT only, so a quiet sample and a
+        // loud one of the same drum yield the same spectrum. Applied on the way
+        // into the FFT rather than to the buffer, which is const and shared.
+        // f.rms above deliberately keeps the original level - it drives velocity.
+        const float peak = buffer.getMagnitude(0, 0, numSamples);
+        const float normalisingGain = peak > 0.0f ? 1.0f / peak : 1.0f;
+
         fft.reset();
-        
+
         for (int i = 0; i < numSamples; i++) {
-            std::optional<std::array<float, FFTProcessor::numBins>> retVal = fft.processSample(inputData[i]);
-            
+            std::optional<std::array<float, FFTProcessor::numBins>> retVal
+                = fft.processSample(inputData[i] * normalisingGain);
+
             if (retVal.has_value()) {
                 f.stftData.push_back(*retVal);
             }
@@ -83,10 +92,15 @@ HitFeatures HitClassifier::extractFeatures(const juce::AudioBuffer<float>& buffe
     return f;
 }
 
-float HitClassifier::getDelta(const std::vector<float>& values, const std::vector<float>& volumes, const std::vector<float>& avgEnergies)
+float HitClassifier::getDelta(const std::vector<float>& values, const std::vector<float>& volumes, const std::vector<float>& avgEnergies,
+                              float* energyWeightOut)
 {
     const int intendedFrameCount = 6;
     static constexpr float scalingFactor = 10.0f;
+
+    if (energyWeightOut != nullptr)
+        *energyWeightOut = 0.0f;
+
     // 1. Guard: Ensure vectors are valid, match in size, and have at least 6 frames
     const int numFrames = static_cast<int>(values.size());
     if (numFrames < intendedFrameCount || volumes.size() != values.size())
@@ -138,10 +152,15 @@ float HitClassifier::getDelta(const std::vector<float>& values, const std::vecto
     if (std::abs(denominator) > 1e-5f)
     {
         float result = ((M * sumXY) - (sumX * sumY)) / denominator;
-        float energyWeight = std::log(sumEnergies);
+        float energyWeight = 2 * (std::log(sumEnergies) - 2.9);
         DBG("Dynamic start index: " << peakIndex << " | 6-frame delta: " << result);
         DBG("Delta weight from total energy: " << energyWeight);
-        return scalingFactor * result * energyWeight;
+
+        if (energyWeightOut != nullptr)
+            *energyWeightOut = energyWeight;
+
+        return scalingFactor * result;
+        //return scalingFactor * result * energyWeight;
     }
     
     return 0.0f;
@@ -292,7 +311,8 @@ HitType HitClassifier::classify(const HitFeatures& f, std::ofstream& csvFile)
 
             // C. Calculate Delta (Spectral Shift Direction: End - Start)
             //pooledFeatures.centroidDelta = getDelta(spectralCentroids);
-            pooledFeatures.centroidDelta = getDelta(lowMidCentroids, totalEnergies, avgLowMidEnergies);
+            pooledFeatures.centroidDelta = getDelta(lowMidCentroids, totalEnergies, avgLowMidEnergies,
+                                                    &pooledFeatures.deltaEnergyWeight);
             
             pooledFeatures.lowDecayCentroid  = DrumFeatureExtractor::calculateTemporalCentroid(avgLowEnergies);
             pooledFeatures.highDecayCentroid = DrumFeatureExtractor::calculateTemporalCentroid(avgMidHighEnergies);
@@ -327,7 +347,8 @@ HitType HitClassifier::classify(const HitFeatures& f, std::ofstream& csvFile)
                     << pooledFeatures.centroidDelta << ","
                     << pooledFeatures.topEndHeavyRatio << ","
                     << pooledFeatures.lowEndHeavyRatio << ","
-                    << pooledFeatures.decayRatio << std::endl;
+                    << pooledFeatures.decayRatio << ","
+                    << pooledFeatures.deltaEnergyWeight << std::endl;
         }
         
         DBG("Hat Probabilities:");

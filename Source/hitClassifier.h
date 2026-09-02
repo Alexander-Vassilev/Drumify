@@ -27,6 +27,8 @@ struct PooledHitFeatures
     float lowDecayCentroid = 0.0f;  // Center of mass for low decay
     float highDecayCentroid = 0.0f; // Center of mass for high decay
     float decayRatio = 0.0f;        // Low decay divided by High decay
+
+    float deltaEnergyWeight = 0.0f; // The energy term getDelta scales its slope by
 };
 
 struct HitFeatures
@@ -96,7 +98,7 @@ const DrumClassParameters kickParams {
     {
         0.6,  // centroidWeight
         1,  // deltaWeight
-        0.8,  // topWeight
+        0.05,  // topWeight
         1.0   // lowWeight
     }
 };
@@ -222,14 +224,16 @@ public:
     FFTProcessor fft;
     static PooledHitFeatures totalFeatures; // To find stats across all hits
 
-    /** The features written to the CSV, in column order. */
-    static constexpr int numTrackedFeatures = 5;
+    /** The features a batch run reports mean and standard deviation for, in the
+        same order as the CSV's value columns.
+    */
+    static constexpr int numTrackedFeatures = 6;
     static const char* const trackedFeatureNames[numTrackedFeatures];
 
     static std::array<double, numTrackedFeatures> toFeatureArray (const PooledHitFeatures& f)
     {
         return { f.meanCentroid, f.centroidDelta, f.topEndHeavyRatio,
-                 f.lowEndHeavyRatio, f.decayRatio };
+                 f.lowEndHeavyRatio, f.decayRatio, f.deltaEnergyWeight };
     }
 
     /** Running mean and variance per feature, so a batch run can report spread
@@ -275,7 +279,12 @@ public:
 private:
     static float computeRMS(const juce::AudioBuffer<float>& buffer, int length);
     static float computeZeroCrossingRate(const juce::AudioBuffer<float>& buffer, int length);
-    static float getDelta(const std::vector<float>& values, const std::vector<float>& volumes, const std::vector<float>& avgEnergies);
+    /** Returns the energy-weighted 6-frame centroid slope. The unweighted
+        energy term is reported through `energyWeightOut` when supplied, so it
+        can be profiled in its own right.
+    */
+    static float getDelta(const std::vector<float>& values, const std::vector<float>& volumes, const std::vector<float>& avgEnergies,
+                          float* energyWeightOut = nullptr);
     static double calculateGaussianPDF(double x, double mean, double stdev);
     static double calculateClassLikelihood(const PooledHitFeatures& f, const DrumClassParameters& params);
     static void increaseFeatureCount(PooledHitFeatures& f) {
@@ -284,6 +293,7 @@ private:
         HitClassifier::totalFeatures.topEndHeavyRatio += f.topEndHeavyRatio;
         HitClassifier::totalFeatures.lowEndHeavyRatio += f.lowEndHeavyRatio;
         HitClassifier::totalFeatures.decayRatio += f.decayRatio;
+        HitClassifier::totalFeatures.deltaEnergyWeight += f.deltaEnergyWeight;
 
         // Every hit that gets a CSV row also lands here, so a batch run can
         // summarise exactly the rows it appended.

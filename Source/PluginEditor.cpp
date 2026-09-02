@@ -905,7 +905,8 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
     microphone.onRecordToggled = [this] { toggleRecording(); };
     // Temporarily repurposed as the batch-analysis trigger. Loading a single
     // loop is still reachable by dropping a file onto the window.
-    microphone.onUploadLoop    = [this] { batchAnalyseFolder(); };
+    microphone.onUploadLoop    = [this] { loadDrumLoopFromDisk(); };
+    //microphone.onUploadLoop    = [this] { batchAnalyseFolder(); };
 
     speakers.onZoneClicked = [this] (SpeakerComponent::Zone z)
     {
@@ -1091,75 +1092,133 @@ void HackBrownAudioProcessorEditor::showSettingsPopup()
 }
 
 // Dev tool. Absolute because a plugin binary has no reliable way back to the
-// repo; point this at whichever library you want to profile. Matches the style
-// of the CSV path InputProcessor's constructor opens.
-static const char* const batchAnalysisFolder =
-    "/Users/lightspark/Documents/JuceProjects/HackBrown2026/Data/Kicks";
+// repo. Matches the style of the CSV path InputProcessor's constructor opens.
+static const char* const batchAnalysisRoot =
+    "/Users/lightspark/Documents/JuceProjects/HackBrown2026";
+
+namespace
+{
+    struct BatchTarget
+    {
+        const char* label;
+        const char* folder;   // relative to batchAnalysisRoot
+        const char* csv;      // ditto
+    };
+
+    const BatchTarget batchTargets[]
+    {
+        // CSVs sit beside the sample folders in Data/, matching the path
+        // InputProcessor's constructor opens.
+        { "KICK",  "Data/Kicks",  "Data/kickstats.csv"  },
+        { "SNARE", "Data/Snares", "Data/snarestats.csv" },
+        { "HAT",   "Data/Hats",   "Data/hatstats.csv"   }
+    };
+
+    /** A finished run, kept so every drum type can be reported together once the
+        whole sweep is done rather than scattered through the per-file logging.
+    */
+    struct BatchResult
+    {
+        const char* label = nullptr;
+        juce::File folder;
+        juce::File csv;
+        int filesProcessed = 0;
+        HitClassifier::FeatureStats stats;
+    };
+
+    /** std::cout rather than DBG so the summary survives a Release build, which
+        is the one worth profiling a whole sample library with.
+    */
+    void printBatchStats (const char* label, const juce::File& folder,
+                          const juce::File& csv, int filesProcessed,
+                          const HitClassifier::FeatureStats& stats)
+    {
+        std::cout << "\n================ " << label << " ================\n"
+                  << "Folder: " << folder.getFullPathName() << "\n"
+                  << "CSV:    " << csv.getFullPathName() << "\n"
+                  << "Files:  " << filesProcessed << "    Hits: " << stats.count << "\n"
+                  << std::left << std::setw (20) << "Feature"
+                  << std::right << std::setw (12) << "Mean"
+                  << std::setw (12) << "StdDev" << "\n"
+                  << std::string (44, '-') << "\n"
+                  << std::fixed << std::setprecision (4);
+
+        for (int i = 0; i < HitClassifier::numTrackedFeatures; ++i)
+            std::cout << std::left << std::setw (20) << HitClassifier::trackedFeatureNames[i]
+                      << std::right << std::setw (12) << stats.mean (i)
+                      << std::setw (12) << stats.stdev (i) << "\n";
+
+        std::cout << std::defaultfloat << std::endl;
+    }
+}
 
 void HackBrownAudioProcessorEditor::batchAnalyseFolder()
 {
-    const juce::File folder { batchAnalysisFolder };
+    const juce::File root { batchAnalysisRoot };
 
-    if (! folder.isDirectory())
+    juce::StringArray summary;
+    std::vector<BatchResult> results;
+
+    for (const auto& target : batchTargets)
     {
-        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
-                                                "Folder not found",
-                                                juce::String (batchAnalysisFolder) + " is not a directory.");
-        return;
+        const auto folder = root.getChildFile (target.folder);
+        const auto csv = root.getChildFile (target.csv);
+
+        if (! folder.isDirectory())
+        {
+            std::cout << "\nSkipping " << target.label << ": "
+                      << folder.getFullPathName() << " is not a directory." << std::endl;
+
+            summary.add (juce::String (target.label) + ": folder missing");
+            continue;
+        }
+
+        // Each drum type gets its own file, replacing any previous run's.
+        audioProcessor.inputProcessor.openCsv (csv);
+
+        if (! audioProcessor.inputProcessor.csvFile.is_open())
+        {
+            std::cout << "\nSkipping " << target.label << ": could not open "
+                      << csv.getFullPathName() << " for writing." << std::endl;
+
+            summary.add (juce::String (target.label) + ": CSV could not be opened");
+            continue;
+        }
+
+        // Both accumulators are global, so they have to be cleared per drum type
+        // or the stats would run together.
+        HitClassifier::batchStats.reset();
+        HitClassifier::totalFeatures = {};
+
+        int processed = 0;
+
+        // Recursive, so the per-category subfolders are included. This runs on
+        // the message thread and the analyser is not safe to call from anywhere
+        // else, so the UI will be unresponsive until every folder finishes.
+        for (const auto& entry : juce::RangedDirectoryIterator (folder, true, "*.wav", juce::File::findFiles))
+        {
+            audioProcessor.processUploadedLoop (entry.getFile());
+            ++processed;
+        }
+
+        // The stream is buffered, so without this the rows may not reach disk
+        // until it is closed by the next target's openCsv.
+        audioProcessor.inputProcessor.csvFile.flush();
+
+        // Snapshot the accumulator: the next target resets it, and everything is
+        // reported together once the whole sweep has finished.
+        results.push_back ({ target.label, folder, csv, processed, HitClassifier::batchStats });
+
+        summary.add (juce::String (target.label) + ": " + juce::String (processed) + " files, "
+                       + juce::String (HitClassifier::batchStats.count) + " hits -> " + csv.getFileName());
     }
 
-    if (! audioProcessor.inputProcessor.csvFile.is_open())
-    {
-        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
-                                                "No CSV open",
-                                                "InputProcessor could not open its features CSV, so there is nowhere to write.");
-        return;
-    }
-
-    int processed = 0;
-
-    // Summarise only the hits this run produces, not any left over from earlier.
-    HitClassifier::batchStats.reset();
-
-    // Recursive, so the per-category subfolders under Data/Kicks are included.
-    // This runs on the message thread and the analyser is not safe to call from
-    // anywhere else, so the UI will be unresponsive until it finishes.
-    for (const auto& entry : juce::RangedDirectoryIterator (folder, true, "*.wav", juce::File::findFiles))
-    {
-        audioProcessor.processUploadedLoop (entry.getFile());
-        ++processed;
-    }
-
-    // The stream is buffered and stays open for the session, so without this the
-    // rows may not reach disk until the plugin closes.
-    audioProcessor.inputProcessor.csvFile.flush();
-
-    DBG ("Finished batch analysis of " << processed << " files.");
-
-    // std::cout rather than DBG so the summary survives a Release build, which
-    // is the one worth profiling a whole sample library with.
-    const auto& stats = HitClassifier::batchStats;
-
-    std::cout << "\n=== Batch feature summary ===\n"
-              << "Folder: " << folder.getFullPathName() << "\n"
-              << "Files:  " << processed << "    Hits: " << stats.count << "\n"
-              << std::left << std::setw (20) << "Feature"
-              << std::right << std::setw (12) << "Mean"
-              << std::setw (12) << "StdDev" << "\n"
-              << std::string (44, '-') << "\n"
-              << std::fixed << std::setprecision (4);
-
-    for (int i = 0; i < HitClassifier::numTrackedFeatures; ++i)
-        std::cout << std::left << std::setw (20) << HitClassifier::trackedFeatureNames[i]
-                  << std::right << std::setw (12) << stats.mean (i)
-                  << std::setw (12) << stats.stdev (i) << "\n";
-
-    std::cout << std::defaultfloat << std::endl;
+    for (const auto& result : results)
+        printBatchStats (result.label, result.folder, result.csv, result.filesProcessed, result.stats);
 
     juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon,
                                             "Batch analysis finished",
-                                            "Analysed " + juce::String (processed) + " files from "
-                                              + folder.getFullPathName() + " and appended their features to the CSV.");
+                                            summary.joinIntoString ("\n"));
 }
 
 void HackBrownAudioProcessorEditor::loadDrumLoopFromDisk()
@@ -1177,7 +1236,8 @@ void HackBrownAudioProcessorEditor::loadDrumLoopFromDisk()
                 << HitClassifier::totalFeatures.centroidDelta << ","
                 << HitClassifier::totalFeatures.topEndHeavyRatio << ","
                 << HitClassifier::totalFeatures.lowEndHeavyRatio << ","
-                << HitClassifier::totalFeatures.decayRatio << std::endl;
+                << HitClassifier::totalFeatures.decayRatio << ","
+                << HitClassifier::totalFeatures.deltaEnergyWeight << std::endl;
     }
 }
 

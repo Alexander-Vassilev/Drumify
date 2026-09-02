@@ -483,7 +483,7 @@ public:
         // 1. Target the Downloads folder
         auto downloadsDir = juce::File::getSpecialLocation(juce::File::userHomeDirectory)
                             .getChildFile("Downloads");
-        juce::File file ("/Users/lightspark/Documents/JuceProjects/HackBrown2026/Data/kickstats.csv");
+        juce::File file ("/Users/lightspark/Documents/JuceProjects/HackBrown2026/Data/snarestats.csv");
         //auto file = downloadsDir.getChildFile("drum_features.csv");
 
         // 2. Check if the file is new before opening it
@@ -495,9 +495,30 @@ public:
         // 4. Write the header row ONLY if the file was just created
         if (isNewFile && csvFile.is_open())
         {
-            csvFile << "FileName,MeanCentroid,Delta,TopEndHeavyCount,LowEndHeavyCount,HighLowDecayRatio" << std::endl;
+            csvFile << csvHeader << std::endl;
         }
     };
+
+    static constexpr const char* csvHeader =
+        "FileName,MeanCentroid,Delta,TopEndHeavyCount,LowEndHeavyCount,HighLowDecayRatio,EnergyWeight";
+
+    /** Points the feature CSV at a different file, replacing whatever was there
+        and writing a fresh header. The batch runs use this to give each drum
+        type its own file rather than appending them all together.
+    */
+    void openCsv (const juce::File& file)
+    {
+        if (csvFile.is_open())
+            csvFile.close();
+
+        file.getParentDirectory().createDirectory();
+        file.deleteFile();
+
+        csvFile.open (file.getFullPathName().toStdString(), std::ios::out | std::ios::trunc);
+
+        if (csvFile.is_open())
+            csvFile << csvHeader << std::endl;
+    }
     void activate();
     void deactivate();
     void addSample(float sample);
