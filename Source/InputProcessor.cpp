@@ -231,6 +231,52 @@ juce::AudioBuffer<float> InputProcessor::hitsToBuffer() {
     return retBuffer;
 };
 
+/** Writes one detected hit out as a mono wav, named for the file it came from,
+    its position in that file, and what it was classified as - so a folder of
+    these can be skimmed to see where the classifier goes wrong.
+*/
+static void writeExtractedHit (const MouthHit& hit, HitType type, int index,
+                               const juce::String& sourceName, double sampleRate)
+{
+    const int numSamples = juce::jmin (hit.hitLength, hit.buffer.getNumSamples());
+
+    if (numSamples <= 0)
+        return;
+
+    const auto folder = InputProcessor::getExtractedHitsFolder();
+
+    if (! folder.createDirectory())
+        return;
+
+    // Live input has no source file, and re-running one file overwrites its own
+    // hits rather than piling up duplicates.
+    const auto stem = juce::File::createLegalFileName (
+        sourceName.isNotEmpty() ? sourceName.upToLastOccurrenceOf (".", false, false)
+                                : juce::String ("recording"));
+
+    const auto destination = folder.getChildFile (stem
+                                                    + "_" + juce::String (index).paddedLeft ('0', 3)
+                                                    + "_" + HitClassifier::toString (type)
+                                                    + ".wav");
+    destination.deleteFile();
+
+    auto fileStream = std::make_unique<juce::FileOutputStream> (destination);
+
+    if (! fileStream->openedOk())
+        return;
+
+    std::unique_ptr<juce::OutputStream> stream = std::move (fileStream);
+    juce::WavAudioFormat wavFormat;
+
+    auto writer = wavFormat.createWriterFor (stream, juce::AudioFormatWriterOptions {}
+                                                        .withSampleRate (sampleRate > 0.0 ? sampleRate : 44100.0)
+                                                        .withNumChannels (1)
+                                                        .withBitsPerSample (24));
+
+    if (writer != nullptr)
+        writer->writeFromAudioSampleBuffer (hit.buffer, 0, numSamples);
+}
+
 void InputProcessor::classifyStoredHits(double sampleRate)
 {
     classifiedHits.clear();
@@ -334,6 +380,8 @@ void InputProcessor::classifyStoredHits(double sampleRate)
         classified.zcr = features.zcr;
         classified.durationSec = features.durationSec;
         DBG(" Dur=" << classified.durationSec << "s");
+
+        writeExtractedHit(hit, classified.type, i, currFileName, sampleRate);
 
         classifiedHits.push_back(classified);
 

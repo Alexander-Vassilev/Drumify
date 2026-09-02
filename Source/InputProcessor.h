@@ -499,6 +499,26 @@ public:
         }
     };
 
+    /** Where each detected hit is written as its own wav, so the segmentation
+        and the classification can be listened to rather than inferred from the
+        feature numbers. Sits beside the STFT dump.
+    */
+    static juce::File getExtractedHitsFolder()
+    {
+        return juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+                 .getChildFile("DrumifyAnalysis")
+                 .getChildFile("extractedHits");
+    }
+
+    /** Empties the folder. Callers do this at the start of a run rather than it
+        happening per analysis, so a batch sweep keeps every file's hits.
+    */
+    static void clearExtractedHits()
+    {
+        getExtractedHitsFolder().deleteRecursively();
+        getExtractedHitsFolder().createDirectory();
+    }
+
     static constexpr const char* csvHeader =
         "FileName,MeanCentroid,Delta,TopEndHeavyCount,LowEndHeavyCount,HighLowDecayRatio,EnergyWeight";
 

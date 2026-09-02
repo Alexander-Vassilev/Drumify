@@ -1232,6 +1232,9 @@ void HackBrownAudioProcessorEditor::batchAnalyseFolder()
     juce::StringArray summary;
     std::vector<BatchResult> results;
 
+    // Once for the whole sweep, not per file, so every folder's hits survive.
+    InputProcessor::clearExtractedHits();
+
     for (const auto& target : batchTargets)
     {
         const auto folder = root.getChildFile (target.folder);
