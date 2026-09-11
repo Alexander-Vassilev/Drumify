@@ -207,7 +207,7 @@ float HitClassifier::getDelta(const std::vector<float>& values, const std::vecto
     // Measured from a fixed frame rather than wherever the loudest frame landed:
     // the attack is over by frame 3, so this compares the same part of every hit
     // regardless of how the peak amplitude fell.
-    const int startFrame = 3;
+    const int startFrame = 1;
     static constexpr float scalingFactor = 10.0f;
 
     if (energyWeightOut != nullptr)
@@ -293,10 +293,14 @@ double HitClassifier::calculateGaussianPDF(double x, const FeatureDistribution& 
     else if (dist.direction == FeatureDirection::lowerIsBetter)
         z = std::max(z, 0.0);
 
-    double exponent = -(z * z) / 2.0;
-    double coefficient = 1.0 / (stdev * std::sqrt(2.0 * juce::MathConstants<double>::pi));
-
-    return coefficient * std::exp(exponent);
+    // Deliberately not a true density: the 1/(sigma*sqrt(2pi)) coefficient is
+    // dropped so every feature peaks at exactly 1.0 at its mean. With it, a
+    // narrow feature (sigma 0.03) peaked at 13 and a wide one (sigma 425) at
+    // 0.0009, so the product was dominated by how spread out each feature was
+    // rather than by how well the hit matched - and clamping the narrow ones to
+    // 1.0 then flattened their whole central region into an uninformative
+    // plateau. On a common [0, 1] scale, the class weights mean what they say.
+    return std::exp(-(z * z) / 2.0);
 }
 
 double HitClassifier::calculateClassLikelihood(const PooledHitFeatures& f, const DrumClassParameters& params)
@@ -308,12 +312,7 @@ double HitClassifier::calculateClassLikelihood(const PooledHitFeatures& f, const
     double pDecay    = calculateGaussianPDF(f.decayRatio,       params.decayRatio);
     double pZcr      = calculateGaussianPDF(f.transientZcr,     params.transientZcr);
 
-    pCentroid = std::min(1.0, pCentroid);
-    pDelta    = std::min(1.0, pDelta);
-    pTop      = std::min(1.0, pTop);
-    pLow      = std::min(1.0, pLow);
-    pDecay    = std::min(1.0, pDecay);
-    pZcr      = std::min(1.0, pZcr);
+    // No clamping needed: calculateGaussianPDF already tops out at 1.0.
 
     DBG (juce::String::formatted (
         "pCentroid: %-6.2f | pDelta: %-6.2f | pTopEndHeavyRatio: %-6.2f | pLowEndHeavyRatio: %-6.2f | pHighLowDecayRatio: %-6.2f | pTransientZCR: %-6.2f",
@@ -481,12 +480,13 @@ HitType HitClassifier::classify(const HitFeatures& f, std::ofstream& csvFile)
         
         // Print the resulting dynamic footprint
         DBG (juce::String::formatted (
-            "Mean Centroid: %-6.2f | Delta: %-6.2f | TopEndHeavyCount: %-6.2f | LowEndHeavyCount: %-6.2f | HighLowDecayRatio: %-6.2f",
+            "Mean Centroid: %-6.2f | Delta: %-6.2f | TopEndHeavyCount: %-6.2f | LowEndHeavyCount: %-6.2f | HighLowDecayRatio: %-6.2f | ZCR: %-6.2f",
             pooledFeatures.meanCentroid,
             pooledFeatures.centroidDelta,
             pooledFeatures.topEndHeavyRatio,
             pooledFeatures.lowEndHeavyRatio,
-            pooledFeatures.decayRatio
+            pooledFeatures.decayRatio,
+            pooledFeatures.transientZcr
         ));
         
         increaseFeatureCount(pooledFeatures);

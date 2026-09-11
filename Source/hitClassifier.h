@@ -11,6 +11,15 @@ static constexpr int stftMaxWindowCount = 300;
 // envelope follower finds no distinct spike.
 static constexpr int transientZcrWindowLength = 700;
 static constexpr int transientZcrFallbackStart = 300;
+// Scales every feature weight except ZCR, so a single value shifts how much
+// the spectral features say relative to it. Below 1 makes ZCR more decisive;
+// above 1 less so - the weights are exponents in a product, so doubling them
+// doubles those features' share of the decision in log space.
+static constexpr float featureWeightScale = 1.0f;
+
+// ZCR gets the loudest voice: it separates hats from everything else by a
+// wide margin, and kicks from snares at their means.
+static constexpr float zcrWeight = 2.0f;
 
 enum class HitType
 {
@@ -116,12 +125,12 @@ const DrumClassParameters hatParams {
     { 0.3805,  0.0945, FeatureDirection::higherIsBetter },  // TransientZCR
 
     {
-        0.0,  // centroidWeight
-        1.3,  // deltaWeight
-        1.0,  // topWeight
-        0.6,  // lowWeight
-        0.5,  // decayWeight - hat and snare decay overlap, so weight it lightly
-        1.0   // zcrWeight
+        featureWeightScale * 0.0,  // centroidWeight
+        featureWeightScale * 1.3,  // deltaWeight
+        featureWeightScale * 1.0,  // topWeight
+        featureWeightScale * 0.6,  // lowWeight
+        featureWeightScale * 0.5,  // decayWeight - hat and snare decay overlap, so weight it lightly
+        zcrWeight
     }
 };
 
@@ -138,12 +147,12 @@ const DrumClassParameters kickParams {
     { 0.0165,   0.0307, FeatureDirection::lowerIsBetter },  // TransientZCR
 
     {
-        0.6,  // centroidWeight
-        1,    // deltaWeight
-        0.05, // topWeight
-        1.0,  // lowWeight
-        1.0,  // decayWeight - the one feature that cleanly separates kicks
-        1.0   // zcrWeight
+        featureWeightScale * 0.6,  // centroidWeight
+        featureWeightScale * 1,    // deltaWeight
+        featureWeightScale * 0.05, // topWeight
+        featureWeightScale * 1.0,  // lowWeight
+        featureWeightScale * 1.0,  // decayWeight - the one feature that cleanly separates kicks
+        zcrWeight
     }
 };
 
@@ -158,12 +167,12 @@ const DrumClassParameters snareParams {
     { 0.0907,  0.0573 },  // TransientZCR
 
     {
-        1,    // centroidWeight
-        1.0,  // deltaWeight
-        1.2,  // topWeight
-        0.7,  // lowWeight
-        0.5,  // decayWeight - overlaps the hat distribution
-        1.0   // zcrWeight
+        featureWeightScale * 1,    // centroidWeight
+        featureWeightScale * 1.0,  // deltaWeight
+        featureWeightScale * 1.2,  // topWeight
+        featureWeightScale * 0.7,  // lowWeight
+        featureWeightScale * 0.5,  // decayWeight - overlaps the hat distribution
+        zcrWeight
     }
 };
 

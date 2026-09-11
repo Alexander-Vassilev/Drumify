@@ -392,6 +392,7 @@ public:
         prevSMA = 0.0f;
         consecutiveOverCounterDetecting = 0;
         savedSample = 0.0f;
+        cooldownRemaining = 0;
     }
 
     void setRatioThreshold(float newThreshold)
@@ -422,7 +423,26 @@ public:
         if (!consecutiveOverCounterDetecting) savedSample = prevSMA;
         if (currentSMA > prevSMA) consecutiveOverCounterDetecting++;
         else consecutiveOverCounterDetecting = 0;
-        
+
+        // Everything above this point still runs during the cooldown - the
+        // averages, the variance history and the rise counter all keep tracking,
+        // so the detector comes out of it with current state rather than a gap.
+        if (cooldownRemaining > 0)
+        {
+            --cooldownRemaining;
+
+            // A tentative trigger from before the cooldown would otherwise be
+            // sitting here waiting to confirm the moment it lifts.
+            isTentative = false;
+            consecutiveOverCounterDetected = 0;
+
+            prevVariance2 = prevVariance1;
+            prevVariance1 = currentVariance;
+            prevSMA = currentSMA;
+
+            return false;
+        }
+
         if (!isTentative)
         {
             float mediumMeanRatio = currentSMA / mediumHistoryMean;
@@ -452,6 +472,7 @@ public:
                     onsetConfirmed = true;
                     isTentative = false; // Reset verification state
                     consecutiveOverCounterDetected = 0;
+                    cooldownRemaining = onsetCooldownSamples;
                 }
             }
             else
@@ -487,6 +508,11 @@ private:
     
     float prevVariance1 = 0.0f; // Variance from 1 sample ago (z^-1)
     float prevVariance2 = 0.0f; // Variance from 2 samples ago (z^-2)
+
+    // A confirmed onset blocks further triggers for this many ODF samples, so a
+    // single attack cannot be chopped into several hits as it climbs.
+    static constexpr int onsetCooldownSamples = 7;
+    int cooldownRemaining = 0;
 };
 
 
@@ -608,7 +634,7 @@ private:
     int preRollIndex = 0;
     
     // Latency constants
-    static constexpr int onsetLatency   = 1500; // Latency of the FFT + ODF + Statistical detector
+    static constexpr int onsetLatency   = 100; // Latency of the FFT + ODF + Statistical detector
     static constexpr int padBeforeOnset  = 256;  // Silence cushion before the transient
     static constexpr int totalDelay      = onsetLatency + padBeforeOnset; // 1756 samples total
 

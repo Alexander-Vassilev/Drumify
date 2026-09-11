@@ -905,8 +905,8 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
     microphone.onRecordToggled = [this] { toggleRecording(); };
     // Temporarily repurposed as the batch-analysis trigger. Loading a single
     // loop is still reachable by dropping a file onto the window.
-    microphone.onUploadLoop    = [this] { loadDrumLoopFromDisk(); };
-    //microphone.onUploadLoop    = [this] { batchAnalyseFolder(); };
+    if (true) microphone.onUploadLoop    = [this] { loadDrumLoopFromDisk(); };
+    else microphone.onUploadLoop    = [this] { batchAnalyseFolder(); };
 
     speakers.onZoneClicked = [this] (SpeakerComponent::Zone z)
     {
