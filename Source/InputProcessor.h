@@ -386,9 +386,12 @@ public:
         longHistoryMeanSMA.reset();
         isTentative = false;
         savedMean = 0.0f;
-        consecutiveOverCounter = 0;
+        consecutiveOverCounterDetected = 0;
         prevVariance1 = 0.0f;
         prevVariance2 = 0.0f;
+        prevSMA = 0.0f;
+        consecutiveOverCounterDetecting = 0;
+        savedSample = 0.0f;
     }
 
     void setRatioThreshold(float newThreshold)
@@ -408,19 +411,23 @@ public:
         float currentVariance = mediumHistoryMeanSMA.getVariance();
         float varianceTwoSamplesAgo = prevVariance2;
         
-        if (false)
+        if (true)
         DBG (juce::String::formatted (
             "sample #: %-8d | short-term avg: %-12.4f | long-term avg: %-12.4f | VERY long-term avg: %-12.4f | Variance: %-10.4f",
             sampleCount, currentSMA, mediumHistoryMean, longHistoryMean, mediumHistoryMeanSMA.getVariance()
         ));
         
         bool onsetConfirmed = false;
-
+        
+        if (!consecutiveOverCounterDetecting) savedSample = prevSMA;
+        if (currentSMA > prevSMA) consecutiveOverCounterDetecting++;
+        else consecutiveOverCounterDetecting = 0;
+        
         if (!isTentative)
         {
             float mediumMeanRatio = currentSMA / mediumHistoryMean;
             float longMeanRatio = currentSMA / longHistoryMean;
-            float meanGain = currentSMA - mediumHistoryMean;
+            //float meanGain = currentSMA - mediumHistoryMean;
             bool longTermTrigger = (mediumMeanRatio > 1.1 && longMeanRatio > 1.4) && (varianceTwoSamplesAgo < 25000);
             
             // If the current average spikes significantly above the running history mean
@@ -428,35 +435,37 @@ public:
             {
                 isTentative = true;
                 savedMean = mediumHistoryMean; // Lock in the baseline mean at the moment of the spike
-                consecutiveOverCounter = 1;
+                consecutiveOverCounterDetected = 1;
             }
         }
-        else
+        
+        if (isTentative) // Doing a separate if statement is necessary so it can enter from the inside of the previous if statement
         {
             // We are in the 10-sample verification window.
             // Check if the signal stays above the baseline mean we locked in.
-            if (currentSMA > savedMean)
+            if ((currentSMA > savedMean) || consecutiveOverCounterDetecting)
             {
-                consecutiveOverCounter++;
+                consecutiveOverCounterDetected++;
                 
-                if (consecutiveOverCounter >= 5)
+                if (consecutiveOverCounterDetected >= 5 || consecutiveOverCounterDetecting > 2)
                 {
                     onsetConfirmed = true;
                     isTentative = false; // Reset verification state
-                    consecutiveOverCounter = 0;
+                    consecutiveOverCounterDetected = 0;
                 }
             }
             else
             {
                 // Dropped below the saved baseline mean: false alarm, abort trigger.
                 isTentative = false;
-                consecutiveOverCounter = 0;
+                consecutiveOverCounterDetected = 0;
             }
         }
         
         // --- Shift the delay line history at the very end of processing ---
         prevVariance2 = prevVariance1;
         prevVariance1 = currentVariance;
+        prevSMA = currentSMA;
 
         return onsetConfirmed;
     }
@@ -469,8 +478,12 @@ private:
     float ratioThreshold;
     float absoluteThreshold;
     bool isTentative = false;
+    int consecutiveOverCounterDetected = 0;
     float savedMean = 0.0f;
-    int consecutiveOverCounter = 0;
+    
+    float prevSMA = 0.0f;
+    int consecutiveOverCounterDetecting = 0;
+    float savedSample = 0.0f;
     
     float prevVariance1 = 0.0f; // Variance from 1 sample ago (z^-1)
     float prevVariance2 = 0.0f; // Variance from 2 samples ago (z^-2)

@@ -201,7 +201,7 @@ private:
     
     std::ofstream logFile;
     juce::File file = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
-                .getChildFile("ODFAnalysis/ODFValues_beatbox.txt");
+                .getChildFile("ODFAnalysis/ODFValues_new.txt");
     
     bool playprint = true;
 
