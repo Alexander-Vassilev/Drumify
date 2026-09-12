@@ -8,7 +8,7 @@ HitClassifier::FeatureStats HitClassifier::batchStats {};
 const char* const HitClassifier::trackedFeatureNames[HitClassifier::numTrackedFeatures]
 {
     "MeanCentroid", "Delta", "TopEndHeavyRatio", "LowEndHeavyRatio", "HighLowDecayRatio",
-    "EnergyWeight", "TransientZCR"
+    "EnergyWeight", "TransientZCR", "CentroidNoBass"
 };
 
 float HitClassifier::computeRMS(const juce::AudioBuffer<float>& buffer, int length)
@@ -75,6 +75,56 @@ float HitClassifier::computeZeroCrossingRateInRange(const juce::AudioBuffer<floa
     // Normalised by the window actually measured, so a truncated window at the
     // end of a short hit stays comparable with a full one.
     return (float)crossings / (float)span;
+}
+
+float HitClassifier::computeSchmittZeroCrossingRateInRange(const juce::AudioBuffer<float>& buffer,
+                                                           int startSample, int endSample)
+{
+    endSample = juce::jmin(endSample, buffer.getNumSamples());
+    startSample = juce::jmax(0, startSample);
+
+    const int span = endSample - startSample;
+
+    if (span <= 1)
+        return 0.0f;
+
+    const float* data = buffer.getReadPointer(0);
+
+    // Absolute magnitude threshold (hysteresis deadband).
+    // Samples must clear this level on the opposite side to trigger a state flip.
+    // Adjust this value based on expected background noise floor (e.g., -40 dB ~= 0.01f).
+    constexpr float hysteresisThreshold = 0.02f;
+
+    // Track the current polarity state (+1 or -1)
+    int currentPolarity = (data[startSample] >= 0.0f) ? 1 : -1;
+    int crossings = 0;
+
+    for (int i = startSample + 1; i < endSample; ++i)
+    {
+        const float sample = data[i];
+        //DBG("sample: " << sample);
+
+        if (currentPolarity == 1)
+        {
+            // Currently in POSITIVE state: wait for sample to drop below the negative threshold
+            if (sample < -hysteresisThreshold)
+            {
+                ++crossings;
+                currentPolarity = -1;
+            }
+        }
+        else
+        {
+            // Currently in NEGATIVE state: wait for sample to exceed the positive threshold
+            if (sample > hysteresisThreshold)
+            {
+                ++crossings;
+                currentPolarity = 1;
+            }
+        }
+    }
+
+    return static_cast<float>(crossings) / static_cast<float>(span);
 }
 
 int HitClassifier::findTransientStart(const juce::AudioBuffer<float>& buffer, int length, double sampleRate)
@@ -166,8 +216,8 @@ HitFeatures HitClassifier::extractFeatures(const juce::AudioBuffer<float>& buffe
     // hit ends before the window does.
     const int transientStart = findTransientStart(buffer, length, sampleRate);
     DBG("ZCR calc starts: " << transientStart);
-    f.transientZcr = computeZeroCrossingRateInRange(buffer, transientStart,
-                                                    transientStart + transientZcrWindowLength);
+    f.transientZcr = computeSchmittZeroCrossingRateInRange(buffer, transientStart,
+                                                           transientStart + transientZcrWindowLength);
     
     DBG("length: " << f.durationSec);
     
@@ -305,8 +355,9 @@ double HitClassifier::calculateGaussianPDF(double x, const FeatureDistribution& 
 
 double HitClassifier::calculateClassLikelihood(const PooledHitFeatures& f, const DrumClassParameters& params)
 {
-    double pCentroid = calculateGaussianPDF(f.meanCentroid,     params.meanCentroid);
-    double pDelta    = calculateGaussianPDF(f.centroidDelta,    params.delta);
+    double pCentroid = calculateGaussianPDF(f.meanCentroid,       params.meanCentroid);
+    double pNoBass   = calculateGaussianPDF(f.meanCentroidNoBass, params.centroidNoBass);
+    double pDelta    = calculateGaussianPDF(f.centroidDelta,      params.delta);
     double pTop      = calculateGaussianPDF(f.topEndHeavyRatio, params.topEndHeavy);
     double pLow      = calculateGaussianPDF(f.lowEndHeavyRatio, params.lowEndHeavy);
     double pDecay    = calculateGaussianPDF(f.decayRatio,       params.decayRatio);
@@ -315,11 +366,12 @@ double HitClassifier::calculateClassLikelihood(const PooledHitFeatures& f, const
     // No clamping needed: calculateGaussianPDF already tops out at 1.0.
 
     DBG (juce::String::formatted (
-        "pCentroid: %-6.2f | pDelta: %-6.2f | pTopEndHeavyRatio: %-6.2f | pLowEndHeavyRatio: %-6.2f | pHighLowDecayRatio: %-6.2f | pTransientZCR: %-6.2f",
-        pCentroid, pDelta, pTop, pLow, pDecay, pZcr
+        "pCentroid: %-6.2f | pCentroidNoBass: %-6.2f | pDelta: %-6.2f | pTopEndHeavyRatio: %-6.2f | pLowEndHeavyRatio: %-6.2f | pHighLowDecayRatio: %-6.2f | pTransientZCR: %-6.2f",
+        pCentroid, pNoBass, pDelta, pTop, pLow, pDecay, pZcr
     ));
 
     double wCentroid = std::pow(pCentroid, params.weights.centroidWeight);
+    double wNoBass   = std::pow(pNoBass,   params.weights.centroidNoBassWeight);
     double wDelta    = std::pow(pDelta,    params.weights.deltaWeight);
     double wTop      = std::pow(pTop,      params.weights.topWeight);
     double wLow      = std::pow(pLow,      params.weights.lowWeight);
@@ -327,7 +379,7 @@ double HitClassifier::calculateClassLikelihood(const PooledHitFeatures& f, const
     double wZcr      = std::pow(pZcr,      params.weights.zcrWeight);
 
     // Naive Bayes Assumption: Multiply the independent feature probabilities together
-    return wCentroid * wDelta * wTop * wLow * wDecay * wZcr;
+    return wCentroid * wNoBass * wDelta * wTop * wLow * wDecay * wZcr;
 }
 
 // Heuristic classification:
@@ -342,6 +394,7 @@ HitType HitClassifier::classify(const HitFeatures& f, std::ofstream& csvFile)
         const int numWindows = f.stftData.size();
         int analysisLen = std::min(numWindows, 28);
         std::vector<float> spectralCentroids;
+        std::vector<float> noBassCentroids;
         std::vector<float> lowMidCentroids;
         std::vector<float> avgLowEnergies;
         std::vector<float> avgLowMidEnergies;
@@ -369,6 +422,14 @@ HitType HitClassifier::classify(const HitFeatures& f, std::ofstream& csvFile)
             
             // 2. Extract features cleanly using the helper class
             float centroid = DrumFeatureExtractor::calculateSpectralCentroid(fftFilterbank, 0, numFilters);
+
+            // Same centroid with the two lowest mel bands left out, so the sub
+            // and bass that anchor a kick's centroid do not dominate. What is
+            // left is the brightness of everything above the fundamental -
+            // the beater click on a kick, the wires on a snare.
+            float noBassCentroid = DrumFeatureExtractor::calculateSpectralCentroid(fftFilterbank,
+                                                                                    noBassCentroidFirstBand,
+                                                                                    numFilters);
             float lowMidCentroid = DrumFeatureExtractor::calculateSpectralCentroid(fftFilterbank, 0, 8);
             float prominence = DrumFeatureExtractor::calculateLowMidProminence(f.stftData[i], 44100, FFTProcessor::numBins);
             float lowEnergy = DrumFeatureExtractor::calculateAvgEnergyInBand(fftFilterbank, 0, 3);
@@ -378,6 +439,7 @@ HitType HitClassifier::classify(const HitFeatures& f, std::ofstream& csvFile)
             float highEnergy = DrumFeatureExtractor::calculateAvgEnergyInBand(fftFilterbank, 17, 25);
             
             spectralCentroids.push_back(centroid);
+            noBassCentroids.push_back(noBassCentroid);
             lowMidCentroids.push_back(lowMidCentroid);
             prominences.push_back(prominence);
             avgLowEnergies.push_back(lowEnergy);
@@ -394,6 +456,7 @@ HitType HitClassifier::classify(const HitFeatures& f, std::ofstream& csvFile)
         
         // 3. Pool values over time
         float centroidSum = 0.0f;
+        float noBassCentroidSum = 0.0f;
         float prominenceSum = 0.0f;
 
         // Mean of the per-frame band ratios rather than a count of frames that
@@ -413,6 +476,7 @@ HitType HitClassifier::classify(const HitFeatures& f, std::ofstream& csvFile)
 
         for (int i = 0; i < analysisLen; ++i) {
             centroidSum += spectralCentroids[i];
+            noBassCentroidSum += noBassCentroids[i];
             prominenceSum += prominences[i];
             //DBG("Low avg nrg: " << avgLowEnergies[i]);
             //DBG("Mid avg nrg: " << avgMidEnergies[i]);
@@ -435,6 +499,7 @@ HitType HitClassifier::classify(const HitFeatures& f, std::ofstream& csvFile)
         }
 
         pooledFeatures.meanCentroid = centroidSum / static_cast<float>(analysisLen);
+        pooledFeatures.meanCentroidNoBass = noBassCentroidSum / static_cast<float>(analysisLen);
         pooledFeatures.meanLowMidProminence = prominenceSum / static_cast<float>(analysisLen);
         pooledFeatures.topEndHeavyRatio = topEndRatioFrames > 0 ? topEndRatioSum / static_cast<float>(topEndRatioFrames) : 0.0f;
         pooledFeatures.lowEndHeavyRatio = lowEndRatioFrames > 0 ? lowEndRatioSum / static_cast<float>(lowEndRatioFrames) : 0.0f;
@@ -480,8 +545,9 @@ HitType HitClassifier::classify(const HitFeatures& f, std::ofstream& csvFile)
         
         // Print the resulting dynamic footprint
         DBG (juce::String::formatted (
-            "Mean Centroid: %-6.2f | Delta: %-6.2f | TopEndHeavyCount: %-6.2f | LowEndHeavyCount: %-6.2f | HighLowDecayRatio: %-6.2f | ZCR: %-6.2f",
+            "Mean Centroid: %-6.2f | Mean No-Sub Centroid: %-6.2f | Delta: %-6.2f | TopEndHeavyCount: %-6.2f | LowEndHeavyCount: %-6.2f | HighLowDecayRatio: %-6.2f | ZCR: %-6.2f",
             pooledFeatures.meanCentroid,
+            pooledFeatures.meanCentroidNoBass,
             pooledFeatures.centroidDelta,
             pooledFeatures.topEndHeavyRatio,
             pooledFeatures.lowEndHeavyRatio,
@@ -501,7 +567,8 @@ HitType HitClassifier::classify(const HitFeatures& f, std::ofstream& csvFile)
                     << pooledFeatures.lowEndHeavyRatio << ","
                     << pooledFeatures.decayRatio << ","
                     << pooledFeatures.deltaEnergyWeight << ","
-                    << pooledFeatures.transientZcr << std::endl;
+                    << pooledFeatures.transientZcr << ","
+                    << pooledFeatures.meanCentroidNoBass << std::endl;
         }
         
         DBG("Hat Probabilities:");

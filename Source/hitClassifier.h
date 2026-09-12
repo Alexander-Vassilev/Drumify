@@ -11,6 +11,17 @@ static constexpr int stftMaxWindowCount = 300;
 // envelope follower finds no distinct spike.
 static constexpr int transientZcrWindowLength = 700;
 static constexpr int transientZcrFallbackStart = 300;
+
+// The most samples the Schmitt-style crossing detector's level averages over.
+// The mean is cumulative up to this and rolling beyond it, so a long half-cycle
+// cannot bank unbounded inertia against a subsequent run of quiet opposing
+// samples. 8 is the smallest value found to still catch a decaying tail.
+static constexpr int schmittMeanMemorySamples = 8;
+
+// First mel band the no-bass centroid includes. Bands 0 and 1 hold the sub and
+// bass that anchor a kick's overall centroid; skipping them leaves the
+// brightness of whatever sits above the fundamental.
+static constexpr int noBassCentroidFirstBand = 2;
 // Scales every feature weight except ZCR, so a single value shifts how much
 // the spectral features say relative to it. Below 1 makes ZCR more decisive;
 // above 1 less so - the weights are exponents in a product, so doubling them
@@ -32,6 +43,7 @@ enum class HitType
 struct PooledHitFeatures
 {
     float meanCentroid = 0.0f;
+    float meanCentroidNoBass = 0.0f;  // centroid over mel bands 2 and up
     float centroidStdDev = 0.0f;
     float centroidDelta = 0.0f;
     float meanLowMidProminence = 0.0f;
@@ -81,6 +93,7 @@ struct FeatureDistribution
 struct FeatureWeights
 {
     double centroidWeight = 1.0;
+    double centroidNoBassWeight = 1.0;
     double deltaWeight    = 1.0;
     double topWeight      = 1.0;
     double lowWeight      = 1.0;
@@ -91,6 +104,7 @@ struct FeatureWeights
 struct DrumClassParameters
 {
     FeatureDistribution meanCentroid;
+    FeatureDistribution centroidNoBass;
     FeatureDistribution delta;
     FeatureDistribution topEndHeavy;
     FeatureDistribution lowEndHeavy;
@@ -112,30 +126,9 @@ struct ClassificationResult
 // Data/Snares (260). Re-run the sweep and update these together whenever a
 // feature's definition changes, or they will describe the old scale.
 
-const DrumClassParameters hatParams {
-    { 17.2599, 1.6477 },   // Mean Centroid
-    { -0.0023, 1.3483 },   // Delta
-    // The brighter the hit, the more hat-like - there is no such thing as too
-    // much top end here, so values above the mean are not penalised.
-    { 14.0007, 23.2583, FeatureDirection::higherIsBetter },  // TopEndHeavyRatio
-    { 0.4520,  0.3882 },   // LowEndHeavyRatio
-    { 0.9771,  0.1869 },   // HighLowDecayRatio
-    // Crossing rate is the clearest separator hats have: 0.38 against 0.09 for
-    // snares and 0.02 for kicks. Nothing is too busy to be a hat.
-    { 0.3805,  0.0945, FeatureDirection::higherIsBetter },  // TransientZCR
-
-    {
-        featureWeightScale * 0.0,  // centroidWeight
-        featureWeightScale * 1.3,  // deltaWeight
-        featureWeightScale * 1.0,  // topWeight
-        featureWeightScale * 0.6,  // lowWeight
-        featureWeightScale * 0.5,  // decayWeight - hat and snare decay overlap, so weight it lightly
-        zcrWeight
-    }
-};
-
 const DrumClassParameters kickParams {
     { 3.6331,   2.7335 },
+    { 8.9270,   3.2634 },   // CentroidNoBass
     { -1.4477,  1.7798 },
     { 0.8077,   0.9236 },
     // Likewise the more the low end dominates, the more kick-like - and this
@@ -144,10 +137,11 @@ const DrumClassParameters kickParams {
     { 2.5298,   1.8810 },
     // The mirror of the hat case: a kick cannot cross zero too rarely, so only
     // rates above the mean count against it.
-    { 0.0165,   0.0307, FeatureDirection::lowerIsBetter },  // TransientZCR
+    { 0.0067,   0.0128, FeatureDirection::lowerIsBetter },  // TransientZCR
 
     {
         featureWeightScale * 0.6,  // centroidWeight
+        0.0,                       // centroidNoBassWeight - kicks keep the full centroid, sub and all
         featureWeightScale * 1,    // deltaWeight
         featureWeightScale * 0.05, // topWeight
         featureWeightScale * 1.0,  // lowWeight
@@ -158,20 +152,46 @@ const DrumClassParameters kickParams {
 
 const DrumClassParameters snareParams {
     { 12.5936, 1.9702 },
+    { 13.9228, 1.9845 },  // CentroidNoBass
     { -0.3599, 2.3162 },
     { 1.4982,  1.0838 },
     { 1.5298,  1.4059 },
     { 0.8710,  0.2631 },
     // Two-sided: snares sit between the other two, so straying in either
     // direction is evidence against, not for.
-    { 0.0907,  0.0573 },  // TransientZCR
+    { 0.0845,  0.0528 },  // TransientZCR
 
     {
-        featureWeightScale * 1,    // centroidWeight
+        0.0,                       // centroidWeight - superseded by the no-bass version below
+        featureWeightScale * 1,    // centroidNoBassWeight - inherits the old centroid weight
         featureWeightScale * 1.0,  // deltaWeight
-        featureWeightScale * 1.2,  // topWeight
+        featureWeightScale * 1.6,  // topWeight
         featureWeightScale * 0.7,  // lowWeight
         featureWeightScale * 0.5,  // decayWeight - overlaps the hat distribution
+        zcrWeight
+    }
+};
+
+const DrumClassParameters hatParams {
+    { 17.2599, 1.6477 },   // Mean Centroid
+    { 17.3860, 1.7578 },   // CentroidNoBass
+    { -0.0023, 1.3483 },   // Delta
+    // The brighter the hit, the more hat-like - there is no such thing as too
+    // much top end here, so values above the mean are not penalised.
+    { 14.0007, 23.2583, FeatureDirection::higherIsBetter },  // TopEndHeavyRatio
+    { 0.4520,  0.3882 },   // LowEndHeavyRatio
+    { 0.9771,  0.1869 },   // HighLowDecayRatio
+    // Crossing rate is the clearest separator hats have: 0.38 against 0.09 for
+    // snares and 0.02 for kicks. Nothing is too busy to be a hat.
+    { 0.3390,  0.1028, FeatureDirection::higherIsBetter },  // TransientZCR
+
+    {
+        0.0,                       // centroidWeight - superseded by the no-bass version below
+        featureWeightScale * 1.0,  // centroidNoBassWeight - inherits the old centroid weight, which was 0
+        featureWeightScale * 1.3,  // deltaWeight
+        featureWeightScale * 1.0,  // topWeight
+        featureWeightScale * 0.1,  // lowWeight
+        featureWeightScale * 0.5,  // decayWeight - hat and snare decay overlap, so weight it lightly
         zcrWeight
     }
 };
@@ -286,13 +306,14 @@ public:
     /** The features a batch run reports mean and standard deviation for, in the
         same order as the CSV's value columns.
     */
-    static constexpr int numTrackedFeatures = 7;
+    static constexpr int numTrackedFeatures = 8;
     static const char* const trackedFeatureNames[numTrackedFeatures];
 
     static std::array<double, numTrackedFeatures> toFeatureArray (const PooledHitFeatures& f)
     {
         return { f.meanCentroid, f.centroidDelta, f.topEndHeavyRatio,
-                 f.lowEndHeavyRatio, f.decayRatio, f.deltaEnergyWeight, f.transientZcr };
+                 f.lowEndHeavyRatio, f.decayRatio, f.deltaEnergyWeight, f.transientZcr,
+                 f.meanCentroidNoBass };
     }
 
     /** Running mean and variance per feature, so a batch run can report spread
@@ -339,9 +360,18 @@ private:
     static float computeRMS(const juce::AudioBuffer<float>& buffer, int length);
     static float computeZeroCrossingRate(const juce::AudioBuffer<float>& buffer, int length);
 
-    /** Zero crossing rate over [startSample, endSample). */
+    /** Zero crossing rate over [startSample, endSample), counting every sign change. */
     static float computeZeroCrossingRateInRange(const juce::AudioBuffer<float>& buffer,
                                                 int startSample, int endSample);
+
+    /** Zero crossing rate over [startSample, endSample) with hysteresis: an
+        opposing sample only counts if it clears the mean level of the current
+        half-cycle, so noise wobbling around zero is not counted. Smaller opposing
+        samples instead erode that mean, so a genuine but quiet change of polarity
+        is still picked up once enough of them accumulate.
+    */
+    static float computeSchmittZeroCrossingRateInRange(const juce::AudioBuffer<float>& buffer,
+                                                       int startSample, int endSample);
 
     /** Where the hit's transient begins, found with an envelope follower over the
         already-extracted hit. Returns transientZcrFallbackStart when the envelope
@@ -365,6 +395,7 @@ private:
         HitClassifier::totalFeatures.decayRatio += f.decayRatio;
         HitClassifier::totalFeatures.deltaEnergyWeight += f.deltaEnergyWeight;
         HitClassifier::totalFeatures.transientZcr += f.transientZcr;
+        HitClassifier::totalFeatures.meanCentroidNoBass += f.meanCentroidNoBass;
 
         // Every hit that gets a CSV row also lands here, so a batch run can
         // summarise exactly the rows it appended.

@@ -559,7 +559,7 @@ public:
     }
 
     static constexpr const char* csvHeader =
-        "FileName,MeanCentroid,Delta,TopEndHeavyCount,LowEndHeavyCount,HighLowDecayRatio,EnergyWeight,TransientZCR";
+        "FileName,MeanCentroid,Delta,TopEndHeavyCount,LowEndHeavyCount,HighLowDecayRatio,EnergyWeight,TransientZCR,CentroidNoBass";
 
     /** Points the feature CSV at a different file, replacing whatever was there
         and writing a fresh header. The batch runs use this to give each drum
