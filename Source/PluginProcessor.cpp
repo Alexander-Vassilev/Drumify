@@ -220,6 +220,17 @@ void HackBrownAudioProcessor::analyzeLoadedDrumLoop (const juce::AudioBuffer<flo
 
     const float* totalInputData = monoBuffer.getReadPointer (0);
 
+    // This is the "original input" for an uploaded loop, so keep it for the
+    // preview the same way recordAudio keeps a live take.
+    {
+        const int toKeep = juce::jmin (totalSamples, capturedInput.getNumSamples());
+
+        if (toKeep > 0)
+            capturedInput.copyFrom (0, 0, monoBuffer, 0, 0, toKeep);
+
+        capturedInputLength.store (toKeep);
+    }
+
     for (int startSample = 0; startSample < totalSamples; startSample += chunkSize)
     {
         int samplesToProcess = std::min (chunkSize, totalSamples - startSample);
@@ -361,6 +372,12 @@ void HackBrownAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlo
         drumSynth.addVoice(new juce::SamplerVoice());
 
     drumSynth.setCurrentPlaybackSampleRate(sampleRate);
+
+    // Allocated here, on the message thread, so recordAudio never has to.
+    capturedInput.setSize(1, juce::jmax(1, (int)(maxCapturedInputSeconds * sampleRate)));
+    capturedInput.clear();
+    capturedInputLength.store(0);
+    wasRecording = false;
 
     drumMidiMap[kick]  = 36;
     drumMidiMap[snare] = 38;
@@ -558,6 +575,21 @@ void HackBrownAudioProcessor::recordAudio(juce::AudioBuffer<float>& buffer) {
 
     auto* inputData = buffer.getReadPointer(0);
 
+    // Keep the raw input for the preview. copyFrom does not allocate, and the
+    // length is clamped to the buffer sized in prepareToPlay, so this is safe on
+    // the audio thread; a take longer than the cap simply stops being kept.
+    {
+        const int written = capturedInputLength.load();
+        const int room = capturedInput.getNumSamples() - written;
+        const int toKeep = juce::jmin(buffer.getNumSamples(), room);
+
+        if (toKeep > 0 && totalNumInputChannels > 0)
+        {
+            capturedInput.copyFrom(0, written, buffer, 0, 0, toKeep);
+            capturedInputLength.store(written + toKeep);
+        }
+    }
+
     for (int channel = 0; channel < 1; ++channel) {
         float* channelData = buffer.getWritePointer(channel);
 
@@ -625,7 +657,14 @@ void HackBrownAudioProcessor::startPreview(PreviewSource source) {
     isPlaybackOn.store(false);
 
     if (source == PreviewSource::input) {
-        inputPreviewBuffer = inputProcessor.hitsToBuffer();
+        // Snapshot the captured input rather than reading it in place, so a
+        // take that starts mid-preview cannot overwrite what is being played.
+        const int length = capturedInputLength.load();
+
+        inputPreviewBuffer.setSize(1, juce::jmax(0, length));
+
+        if (length > 0)
+            inputPreviewBuffer.copyFrom(0, 0, capturedInput, 0, 0, length);
     }
 
     previewingInput.store(source == PreviewSource::input);
@@ -653,7 +692,16 @@ void HackBrownAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
         return;
     }
     
-    if (recordingEnabled.load()) {
+    const bool recording = recordingEnabled.load();
+
+    // A fresh take starts a fresh capture. Edge-detected here rather than in the
+    // editor so it stays in step with what the audio thread actually recorded.
+    if (recording && ! wasRecording)
+        capturedInputLength.store(0);
+
+    wasRecording = recording;
+
+    if (recording) {
         recordAudio(buffer);
     } else if (isPlaybackOn.load()) {
         playAudio(buffer, midiMessages);

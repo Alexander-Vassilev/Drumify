@@ -299,6 +299,7 @@ DrumifyAssets::DrumifyAssets()
     labelPreviewAudio.load  (BinaryData::SpeakersPreviewAudio_png,  BinaryData::SpeakersPreviewAudio_pngSize);
     labelPreviewInput.load  (BinaryData::SpeakersPreviewInput_png,  BinaryData::SpeakersPreviewInput_pngSize);
     labelPreviewOutput.load (BinaryData::SpeakersPreviewOutput_png, BinaryData::SpeakersPreviewOutput_pngSize);
+    labelStopPlayback.load  (BinaryData::SpeakersStopPlayback_png,  BinaryData::SpeakersStopPlayback_pngSize);
 
     savePaint.load       (BinaryData::SavePaint_png,       BinaryData::SavePaint_pngSize);
     saveKeyboard.load    (BinaryData::SaveKeyboard_png,    BinaryData::SaveKeyboard_pngSize);
@@ -481,6 +482,35 @@ SpeakerComponent::SpeakerComponent (const DrumifyAssets& a)
     setMouseCursor (juce::MouseCursor::PointingHandCursor);
 }
 
+SpeakerComponent::~SpeakerComponent()
+{
+    stopTimer();
+}
+
+void SpeakerComponent::setPlayingZone (Zone z)
+{
+    if (playingZone == z)
+        return;
+
+    playingZone = z;
+
+    // Only poll while something is playing; there is nothing to notice otherwise.
+    if (playingZone != Zone::none)
+        startTimerHz (30);
+    else
+        stopTimer();
+
+    repaint();
+}
+
+void SpeakerComponent::timerCallback()
+{
+    // The audio thread ends playback by itself when the buffer runs out, so
+    // the caption has to notice that here rather than wait for a click.
+    if (isPlaybackActive != nullptr && ! isPlaybackActive())
+        setPlayingZone (Zone::none);
+}
+
 SpeakerComponent::Zone SpeakerComponent::zoneAt (juce::Point<float> p) const
 {
     const auto frame = getLocalBounds().toFloat();
@@ -530,12 +560,19 @@ void SpeakerComponent::paint (juce::Graphics& g)
     assets.speakerLeft.drawFrame  (g, frame, zone == Zone::right ? dimmed : 1.0f);
     assets.speakerRight.drawFrame (g, frame, zone == Zone::left  ? dimmed : 1.0f);
 
+    // Off both speakers: the resting caption. On a speaker: its preview caption,
+    // unless that speaker is the one currently playing, in which case the click
+    // would stop it, so say so. The other speaker keeps its preview caption even
+    // while one is playing - clicking it switches source rather than stops.
     const AssetLayer* label = &assets.labelPreviewAudio;
 
-    if (zone == Zone::left)
-        label = &assets.labelPreviewInput;
-    else if (zone == Zone::right)
-        label = &assets.labelPreviewOutput;
+    if (zone != Zone::none)
+    {
+        if (zone == playingZone)
+            label = &assets.labelStopPlayback;
+        else
+            label = zone == Zone::left ? &assets.labelPreviewInput : &assets.labelPreviewOutput;
+    }
 
     label->drawScaledAbout (g, { (float) DrumifyLayout::speakerLabelCentreX,
                                  (float) DrumifyLayout::speakerLabelCentreY },
@@ -910,9 +947,22 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
 
     speakers.onZoneClicked = [this] (SpeakerComponent::Zone z)
     {
+        // A second click on the speaker that is playing stops it. A click on the
+        // other one switches source: startPreview already halts the current
+        // playback before it swaps buffers.
+        if (speakers.getPlayingZone() == z)
+        {
+            audioProcessor.isPlaybackOn.store (false);
+            speakers.setPlayingZone (SpeakerComponent::Zone::none);
+            return;
+        }
+
         audioProcessor.startPreview (z == SpeakerComponent::Zone::left ? PreviewSource::input
                                                                       : PreviewSource::output);
+        speakers.setPlayingZone (z);
     };
+
+    speakers.isPlaybackActive = [this] { return audioProcessor.isPlaybackOn.load(); };
     
     saveButtons.onZoneClicked = [this] (SaveComponent::Zone z) {
         z == SaveComponent::Zone::left ? saveMidiToDisk() : saveAudioToDisk();

@@ -121,7 +121,7 @@ struct DrumifyAssets
     AssetLayer labelInput, labelRecord, labelStopRecording, labelRecording, labelUploadLoop;
 
     AssetLayer speakerBg, speakerLeft, speakerRight;
-    AssetLayer labelPreviewAudio, labelPreviewInput, labelPreviewOutput;
+    AssetLayer labelPreviewAudio, labelPreviewInput, labelPreviewOutput, labelStopPlayback;
 
     AssetLayer savePaint, saveKeyboard, saveLoop;
     AssetLayer labelSaveOutput, labelSaveMidi, labelSaveAudio;
@@ -195,14 +195,28 @@ private:
 /** The two preview speakers and their caption. Hovering one fades the section's
     backdrop and the other speaker; clicking previews that side's audio.
 */
-class SpeakerComponent : public juce::Component
+class SpeakerComponent : public juce::Component,
+                         private juce::Timer
 {
 public:
     enum class Zone { none, left, right };
 
     explicit SpeakerComponent (const DrumifyAssets&);
+    ~SpeakerComponent() override;
 
     std::function<void (Zone)> onZoneClicked;
+
+    /** Polled while a speaker is marked as playing, so the "Stop Playback"
+        caption clears itself once the audio runs out rather than waiting for a
+        click. Playback ends on the audio thread, which cannot tell us directly.
+    */
+    std::function<bool()> isPlaybackActive;
+
+    /** Marks which speaker is currently playing (or none). Hovering that speaker
+        shows "Stop Playback" instead of its preview caption.
+    */
+    void setPlayingZone (Zone);
+    Zone getPlayingZone() const noexcept { return playingZone; }
 
     void paint (juce::Graphics&) override;
 
@@ -212,11 +226,14 @@ public:
     void mouseUp (const juce::MouseEvent&) override;
 
 private:
+    void timerCallback() override;
+
     Zone zoneAt (juce::Point<float>) const;
     void setZone (Zone);
 
     const DrumifyAssets& assets;
     Zone zone = Zone::none;
+    Zone playingZone = Zone::none;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SpeakerComponent)
 };

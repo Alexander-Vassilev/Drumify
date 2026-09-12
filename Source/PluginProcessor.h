@@ -191,8 +191,17 @@ private:
     
     // Rendered playback state
     juce::AudioBuffer<float> renderedDrumBuffer;
-    juce::AudioBuffer<float> inputPreviewBuffer;   // the captured hits, laid end to end
+    juce::AudioBuffer<float> inputPreviewBuffer;   // snapshot handed to playAudio for an input preview
     std::atomic<bool> previewingInput { false };
+
+    // The raw input exactly as it arrived - a live take or an uploaded loop - so
+    // the input preview replays what was actually heard rather than the extracted
+    // hits. Sized once in prepareToPlay: the audio thread appends into it and
+    // must never allocate, so anything past the cap is dropped.
+    static constexpr double maxCapturedInputSeconds = 60.0;
+    juce::AudioBuffer<float> capturedInput;
+    std::atomic<int> capturedInputLength { 0 };
+    bool wasRecording = false;   // audio thread only; detects the start of a take
     int renderedReadPos = 0;
     bool isPlayingRendered = false;
     
