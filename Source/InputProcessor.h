@@ -592,7 +592,7 @@ public:
     HitClassifier hitClassifier;
     int storedHitsIndex = 0;
     void classifyStoredHits(double sampleRate);
-    static constexpr int numHits = 64;
+    static constexpr int numHits = 256;
     juce::String currFileName;
     std::array<MouthHit, numHits> storedHits;
     // Results live here:

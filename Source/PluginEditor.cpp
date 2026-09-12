@@ -886,7 +886,41 @@ public:
         stopButton.onClick = [this] { processor.isPlaybackOn.store (false); };
         addAndMakeVisible (stopButton);
 
-        setSize (300, 220);
+        replaceLabel.setText ("Replace with samples", juce::dontSendNotification);
+        replaceLabel.setFont (DrumifyTheme::mono (13.0f));
+        addAndMakeVisible (replaceLabel);
+
+        setupReplaceToggle (replaceKickToggle,  processor.replaceKick);
+        setupReplaceToggle (replaceSnareToggle, processor.replaceSnare);
+        setupReplaceToggle (replaceHatToggle,   processor.replaceHat);
+
+        setSize (300, 330);
+    }
+
+    /** Binds a checkbox to one of the processor's replace flags. Changing it
+        re-renders the loop straight away if there is one, so the effect is
+        heard without a trip to the update button.
+    */
+    void setupReplaceToggle (juce::ToggleButton& toggle, bool& flag)
+    {
+        toggle.setToggleState (flag, juce::dontSendNotification);
+        toggle.setColour (juce::ToggleButton::textColourId, DrumifyTheme::ink);
+        toggle.setColour (juce::ToggleButton::tickColourId, DrumifyTheme::ink);
+        toggle.setColour (juce::ToggleButton::tickDisabledColourId, DrumifyTheme::ink.withAlpha (0.4f));
+
+        toggle.onClick = [this, &toggle, &flag]
+        {
+            flag = toggle.getToggleState();
+
+            if (processor.inputProcessor.classifiedHits.empty())
+                return;
+
+            // The renderer swaps the buffer playAudio reads, so stop first.
+            processor.isPlaybackOn.store (false);
+            processor.buildDrumBuffer();
+        };
+
+        addAndMakeVisible (toggle);
     }
 
     void paint (juce::Graphics& g) override
@@ -909,6 +943,12 @@ public:
         previewButton.setBounds (area.removeFromTop (44));
         area.removeFromTop (4);
         stopButton.setBounds (area.removeFromTop (44));
+
+        area.removeFromTop (14);
+        replaceLabel.setBounds (area.removeFromTop (20));
+        replaceKickToggle.setBounds  (area.removeFromTop (24));
+        replaceSnareToggle.setBounds (area.removeFromTop (24));
+        replaceHatToggle.setBounds   (area.removeFromTop (24));
     }
 
 private:
@@ -918,6 +958,11 @@ private:
     juce::Slider     speedSlider;
     juce::TextButton previewButton { "Preview Audio" };
     juce::TextButton stopButton    { "Stop Playback" };
+
+    juce::Label        replaceLabel;
+    juce::ToggleButton replaceKickToggle  { "Kicks" };
+    juce::ToggleButton replaceSnareToggle { "Snares" };
+    juce::ToggleButton replaceHatToggle   { "Hats" };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SettingsPanel)
 };
@@ -1013,18 +1058,6 @@ void HackBrownAudioProcessorEditor::paint (juce::Graphics& g)
                                                          (float) DrumifyLayout::titleH)
                                    .translated (slideProgress * (float) getWidth(), 0.0f));
 
-    if (isDragging)
-    {
-        g.setColour (DrumifyTheme::recordAccent.withAlpha (0.14f));
-        g.fillAll();
-
-        g.setColour (DrumifyTheme::recordAccent);
-        g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (6.0f), 14.0f, 3.0f);
-
-        g.setFont (DrumifyTheme::mono (22.0f, true));
-        g.setColour (DrumifyTheme::ink);
-        g.drawText ("Drop your audio loop here", getLocalBounds(), juce::Justification::centred);
-    }
 }
 
 void HackBrownAudioProcessorEditor::resized()
@@ -1099,14 +1132,57 @@ void HackBrownAudioProcessorEditor::toggleRecording()
     microphone.setRecording (nowRecording);
 }
 
+void HackBrownAudioProcessorEditor::applyDrumSample (DrumType drum, const juce::File& file)
+{
+    audioProcessor.loadSampleFromFile (file, audioProcessor.drumMidiMap[drum]);
+
+    // Must follow the load: it scans the sounds actually in the synth.
+    audioProcessor.getLongestSampleLengthInSamples();
+}
+
 void HackBrownAudioProcessorEditor::loadDrumSample (DrumType drum)
 {
-    fileOpener ([this, drum] (const juce::File& file)
-    {
-        audioProcessor.loadSampleFromFile (file, audioProcessor.drumMidiMap[drum]);
-    });
+    fileOpener ([this, drum] (const juce::File& file) { applyDrumSample (drum, file); });
+}
 
-    audioProcessor.getLongestSampleLengthInSamples();
+HackBrownAudioProcessorEditor::DropTarget
+HackBrownAudioProcessorEditor::dropTargetAt (juce::Point<int> editorPoint) const
+{
+    // Same hit regions the mouse uses, so a drop lands exactly where a click
+    // would. Each component's zoneAt expects its own coordinate space.
+    const auto kitPoint = drumKit.getLocalPoint (this, editorPoint).toFloat();
+
+    switch (drumKit.zoneAt (kitPoint))
+    {
+        case DrumKitComponent::Zone::kick:  return DropTarget::kick;
+        case DrumKitComponent::Zone::snare: return DropTarget::snare;
+        case DrumKitComponent::Zone::hats:  return DropTarget::hats;
+        case DrumKitComponent::Zone::none:  break;
+    }
+
+    // Everywhere else uploads the file as the loop - the original whole-window
+    // behaviour, which is also exactly what a click on the capsule's lower half
+    // does, so that target needs no separate case.
+    return DropTarget::loop;
+}
+
+void HackBrownAudioProcessorEditor::showDragTarget (juce::Point<int> editorPoint)
+{
+    const auto drumZone = drumKit.zoneAt (drumKit.getLocalPoint (this, editorPoint).toFloat());
+
+    drumKit.setZone (drumZone);
+
+    // Off the drums the drop becomes the loop, so show the capsule exactly as
+    // it looks when the mouse is on its lower half - the same action.
+    microphone.setZone (drumZone == DrumKitComponent::Zone::none
+                            ? MicrophoneComponent::Zone::bottom
+                            : MicrophoneComponent::Zone::none);
+}
+
+void HackBrownAudioProcessorEditor::clearDragTarget()
+{
+    drumKit.setZone (DrumKitComponent::Zone::none);
+    microphone.setZone (MicrophoneComponent::Zone::none);
 }
 
 void HackBrownAudioProcessorEditor::toggleInfoPage()
@@ -1670,27 +1746,38 @@ bool HackBrownAudioProcessorEditor::isInterestedInFileDrag (const juce::StringAr
     return (ext == ".wav" || ext == ".mp3" || ext == ".aiff" || ext == ".aif" || ext == ".flac");
 }
 
-void HackBrownAudioProcessorEditor::filesDropped (const juce::StringArray& files, int, int)
+void HackBrownAudioProcessorEditor::filesDropped (const juce::StringArray& files, int x, int y)
 {
-    isDragging = false;
-    repaint();
+    clearDragTarget();
 
     if (files.isEmpty())
         return;
 
-    audioProcessor.processUploadedLoop (juce::File (files[0]));
+    const juce::File file (files[0]);
+
+    switch (dropTargetAt ({ x, y }))
+    {
+        case DropTarget::kick:  applyDrumSample (DrumType::kick,  file); break;
+        case DropTarget::snare: applyDrumSample (DrumType::snare, file); break;
+        case DropTarget::hats:  applyDrumSample (DrumType::hat,   file); break;
+        case DropTarget::loop:  audioProcessor.processUploadedLoop (file); break;
+    }
 }
 
-void HackBrownAudioProcessorEditor::fileDragEnter (const juce::StringArray&, int, int)
+void HackBrownAudioProcessorEditor::fileDragEnter (const juce::StringArray&, int x, int y)
 {
-    isDragging = true;
-    repaint();
+    showDragTarget ({ x, y });
+}
+
+void HackBrownAudioProcessorEditor::fileDragMove (const juce::StringArray&, int x, int y)
+{
+    // setZone only repaints on a change, so this is cheap to call per move.
+    showDragTarget ({ x, y });
 }
 
 void HackBrownAudioProcessorEditor::fileDragExit (const juce::StringArray&)
 {
-    isDragging = false;
-    repaint();
+    clearDragTarget();
 }
 
 void HackBrownAudioProcessorEditor::fileOpener (std::function<void (const juce::File&)> fileAction)

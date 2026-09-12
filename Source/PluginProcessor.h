@@ -123,6 +123,18 @@ public:
     InputProcessor inputProcessor;
     float playbackSpeed = 1;
     std::map<DrumType, int> drumMidiMap;
+
+    // Which drums the rendered loop replaces with samples. An unchecked drum
+    // keeps its original audio in place, faded at both ends so the splice into
+    // the rendered loop does not click. Read on the message thread at render.
+    bool replaceKick = true;
+    bool replaceSnare = true;
+    bool replaceHat = true;
+
+    bool shouldReplaceNote (int midiNote) const;
+
+    static constexpr double unreplacedHitFadeInSeconds = 0.000;
+    static constexpr double unreplacedHitFadeOutSeconds = 0.005;
 private:
     void reset();
     void analyzeLoadedDrumLoop (const juce::AudioBuffer<float>& loopBuffer);
@@ -161,6 +173,7 @@ private:
         int sampleIndex;   // absolute sample index in rendered timeline
         int midiNote;      // 36 kick, 38 snare, 42 hat...
         float velocity01;  // 0..1
+        int hitIndex = -1; // into inputProcessor.storedHits, for keeping the original audio
         bool filterOn = false;     // Determines whether to apply formant-accentuating bell filter
         float centerFreq = 1000;  // Filter centre freq
     };

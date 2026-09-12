@@ -437,6 +437,17 @@ bool HackBrownAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts)
 }
 #endif
 
+bool HackBrownAudioProcessor::shouldReplaceNote (int midiNote) const
+{
+    if (midiNote == drumMidiMap.at (kick))  return replaceKick;
+    if (midiNote == drumMidiMap.at (snare)) return replaceSnare;
+    if (midiNote == drumMidiMap.at (hat))   return replaceHat;
+
+    // Anything unclassified keeps falling back to the hat sample as before;
+    // the checkboxes only govern the three named drums.
+    return true;
+}
+
 juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
     const std::vector<DrumEventAbs>& events,
     double sampleRate,
@@ -445,6 +456,14 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
     juce::AudioBuffer<float> out;
     out.setSize(2, outputNumSamples);
     out.clear();
+
+    // Hits kept at their original audio render here, apart from the samples, so
+    // the normalisation below can measure and scale the samples alone. The
+    // originals may already sit at full scale; running them through the same
+    // gain would push them into clipping.
+    juce::AudioBuffer<float> kept;
+    kept.setSize(1, outputNumSamples);
+    kept.clear();
 
     int offset = 0;
 
@@ -456,18 +475,53 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
         //DBG("num events" << events.size());
         bool skipFilter = true;
 
-        // Look the drum up by its note. Unclassified hits fall back to the hat,
-        // as they did when this switched on the note directly.
-        auto sound = getSoundForNote (events[i].midiNote);
+        juce::AudioBuffer<float> copier;
+        const bool replaced = shouldReplaceNote (events[i].midiNote);
 
-        if (sound == nullptr)
-            sound = getSoundForNote (drumMidiMap[hat]);
+        if (! replaced)
+        {
+            // This drum is switched off: keep the hit's own audio in the loop.
+            // It is spliced in at full level - it is already at its recorded
+            // level - with a short fade at each end, because a hard cut into
+            // and out of the rendered material would click.
+            const int hitIndex = events[i].hitIndex;
 
-        if (sound == nullptr || sound->getAudioData() == nullptr)
-            continue;
+            if (hitIndex < 0 || hitIndex >= inputProcessor.storedHitsIndex)
+                continue;
 
-        juce::AudioBuffer<float> copier = *sound->getAudioData();
-        copier.applyGainRamp(0, 0, copier.getNumSamples(), events[i].velocity01, events[i].velocity01);
+            const auto& hit = inputProcessor.storedHits[(size_t) hitIndex];
+            const int hitLength = juce::jmin (hit.hitLength, hit.buffer.getNumSamples());
+
+            if (hitLength <= 0 || hit.buffer.getNumChannels() == 0)
+                continue;
+
+            copier.setSize (1, hitLength);
+            copier.copyFrom (0, 0, hit.buffer, 0, 0, hitLength);
+
+            const int fadeIn = juce::jmin (hitLength / 2, (int) (unreplacedHitFadeInSeconds * sampleRate));
+            const int fadeOut = juce::jmin (hitLength / 2, (int) (unreplacedHitFadeOutSeconds * sampleRate));
+
+            if (fadeIn > 0 || fadeOut > 0)
+            {
+                copier.applyGainRamp (0, 0, fadeIn, 0.0f, 1.0f);
+                copier.applyGainRamp (0, hitLength - fadeOut, fadeOut, 1.0f, 0.0f);
+            }
+        }
+        else
+        {
+            // Look the drum up by its note. Unclassified hits fall back to the hat,
+            // as they did when this switched on the note directly.
+            auto sound = getSoundForNote (events[i].midiNote);
+
+            if (sound == nullptr)
+                sound = getSoundForNote (drumMidiMap[hat]);
+
+            if (sound == nullptr || sound->getAudioData() == nullptr)
+                continue;
+
+            copier = *sound->getAudioData();
+            copier.applyGainRamp(0, 0, copier.getNumSamples(), events[i].velocity01, events[i].velocity01);
+        }
 
         if (!skipFilter) {
             if (events[i].filterOn) {
@@ -489,7 +543,7 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
         if (startSample < 0 || numToCopy <= 0)
             continue;
 
-        auto writePtr = out.getWritePointer(0);
+        auto writePtr = (replaced ? out : kept).getWritePointer(0);
         auto readPtr = copier.getReadPointer(0);
         
         for (int i = 0; i < numToCopy; i++) {
@@ -503,9 +557,19 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
         //DBG("copied");
     }
 
-    //out.copyFrom(0, processLen, *audioData, 0, 0, processLen);
-    //out.clear(0, 2 * processLen, outputNumSamples - 2 * processLen);
-    //DBG("finished building buffer");
+    // Bring the loudest sample hit up to full scale. velocity01 is a raw RMS with
+    // no reference, so without this the whole loop sat at whatever that RMS
+    // happened to be - typically 10-20 dB down. Per-hit dynamics are preserved;
+    // only the overall level moves.
+    if (outputNumSamples > 0)
+    {
+        const float peak = out.getMagnitude(0, 0, outputNumSamples);
+
+        if (peak > 0.0f)
+            out.applyGain(0, 0, outputNumSamples, 1.0f / peak);
+
+        out.addFrom(0, 0, kept, 0, 0, outputNumSamples);
+    }
 
     return out;
 }
@@ -776,7 +840,8 @@ void HackBrownAudioProcessor::buildDrumBuffer() {
         lastSampleHit = processedHit.onsetSample;
         lastSize = processedHit.durationSec;
         DBG("while adding processed hits, this is type: " << (int)processedHit.type);
-        events.push_back({ processedHit.onsetSample, (int)processedHit.type, processedHit.rms }); // kick at 0s
+        events.push_back({ processedHit.onsetSample, (int)processedHit.type, processedHit.rms,
+                           processedHit.hitIndex });
     }
     
     for (auto e : events) {

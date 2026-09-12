@@ -180,10 +180,19 @@ public:
     void mouseExit (const juce::MouseEvent&) override;
     void mouseUp (const juce::MouseEvent&) override;
 
+    /** Which drum a point (in this component's coordinates) lands on. Public so
+        the editor can route a dropped file the same way it routes a click.
+    */
+    Zone zoneAt (juce::Point<float>) const;
+
+    /** Sets the highlighted drum directly. The mouse does this itself; a file
+        being dragged over the window does not reach this component, so the
+        editor drives it to give the drag the same look as a hover.
+    */
+    void setZone (Zone);
+
 private:
     const AssetLayer* layerFor (Zone) const;
-    Zone zoneAt (juce::Point<float>) const;
-    void setZone (Zone);
 
     const DrumifyAssets& assets;
     Zone zone = Zone::none;
@@ -305,12 +314,14 @@ public:
     void mouseExit (const juce::MouseEvent&) override;
     void mouseUp (const juce::MouseEvent&) override;
 
+    /** Sets the hovered half directly - see DrumKitComponent::setZone. */
+    void setZone (Zone);
+
 private:
     juce::Rectangle<float> getFrame() const;
     juce::Rectangle<float> getCapsule() const;
     float getSplitY() const;
     Zone zoneAt (juce::Point<float>) const;
-    void setZone (Zone);
 
     const DrumifyAssets& assets;
     Zone zone = Zone::none;
@@ -378,6 +389,7 @@ public:
     bool isInterestedInFileDrag (const juce::StringArray& files) override;
     void filesDropped (const juce::StringArray& files, int x, int y) override;
     void fileDragEnter (const juce::StringArray& files, int x, int y) override;
+    void fileDragMove (const juce::StringArray& files, int x, int y) override;
     void fileDragExit (const juce::StringArray& files) override;
 
 private:
@@ -397,6 +409,26 @@ private:
     void showSettingsPopup();
     void toggleRecording();
     void loadDrumSample (DrumType);
+
+    /** Loads `file` as the sample for `drum`. The single path behind both the
+        click-then-choose flow and a file dropped straight onto the drum.
+    */
+    void applyDrumSample (DrumType, const juce::File&);
+
+    /** What a file dropped at an editor-space point would do. The three drums
+        route to their sample slot; anywhere else - which includes the lower
+        half of the capsule, whose click action is the same thing - uploads the
+        file as the loop, as a drop anywhere on the window always has.
+    */
+    enum class DropTarget { loop, kick, snare, hats };
+    DropTarget dropTargetAt (juce::Point<int> editorPoint) const;
+
+    /** Lights up whatever a drop at this point would hit, exactly as a mouse
+        hover would: the drum under the pointer, or - off the drums - the
+        capsule's upload state, since that is where the file will go.
+    */
+    void showDragTarget (juce::Point<int> editorPoint);
+    void clearDragTarget();
 
     HackBrownAudioProcessor& audioProcessor;
     DrumifyAssets assets;                 // must outlive the components below
@@ -420,7 +452,7 @@ private:
     juce::AudioFormatManager formatManager;
     std::unique_ptr<juce::FileChooser> chooser;
 
-    bool isDragging = false;
+
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HackBrownAudioProcessorEditor)
 };
