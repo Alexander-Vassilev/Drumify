@@ -22,11 +22,16 @@ static constexpr int schmittMeanMemorySamples = 8;
 // bass that anchor a kick's overall centroid; skipping them leaves the
 // brightness of whatever sits above the fundamental.
 static constexpr int noBassCentroidFirstBand = 2;
+
+// The highpassed ZCR removes everything below this before counting crossings.
+// Tap count must be odd so the linear-phase delay lands on a whole sample.
+static constexpr float highpassZcrCutoffHz = 150.0f;
+static constexpr int highpassZcrFirTaps = 2047;
 // Scales every feature weight except ZCR, so a single value shifts how much
 // the spectral features say relative to it. Below 1 makes ZCR more decisive;
 // above 1 less so - the weights are exponents in a product, so doubling them
 // doubles those features' share of the decision in log space.
-static constexpr float featureWeightScale = 1.0f;
+static constexpr float featureWeightScale = 0.8f;
 
 // ZCR gets the loudest voice: it separates hats from everything else by a
 // wide margin, and kicks from snares at their means.
@@ -56,6 +61,7 @@ struct PooledHitFeatures
 
     float deltaEnergyWeight = 0.0f; // The energy term getDelta scales its slope by
     float transientZcr = 0.0f;      // zcr over a fixed window at the transient
+    float highpassZcr = 0.0f;       // the same, after a 150 Hz linear-phase highpass
 };
 
 struct HitFeatures
@@ -63,6 +69,7 @@ struct HitFeatures
     float rms = 0.0f;
     float zcr = 0.0f;      // zero crossing rate over the whole hit
     float transientZcr = 0.0f;  // zcr over a fixed window at the transient
+    float highpassZcr = 0.0f;   // the same, after a 150 Hz linear-phase highpass
     float durationSec = 0.0f;
     // FFT data
     bool fftActive = true;
@@ -99,6 +106,7 @@ struct FeatureWeights
     double lowWeight      = 1.0;
     double decayWeight    = 1.0;
     double zcrWeight      = 1.0;
+    double highpassZcrWeight = 1.0;
 };
 
 struct DrumClassParameters
@@ -110,6 +118,7 @@ struct DrumClassParameters
     FeatureDistribution lowEndHeavy;
     FeatureDistribution decayRatio;
     FeatureDistribution transientZcr;
+    FeatureDistribution highpassZcr;
 
     FeatureWeights weights;
 };
@@ -138,6 +147,9 @@ const DrumClassParameters kickParams {
     // The mirror of the hat case: a kick cannot cross zero too rarely, so only
     // rates above the mean count against it.
     { 0.0067,   0.0128, FeatureDirection::lowerIsBetter },  // TransientZCR
+    // PLACEHOLDER - copied from TransientZCR until the batch sweep measures it.
+    // Weightless for kicks anyway, so it does not affect classification yet.
+    { 0.0290,   0.0395, FeatureDirection::lowerIsBetter },  // HighpassZCR
 
     {
         featureWeightScale * 0.6,  // centroidWeight
@@ -146,7 +158,8 @@ const DrumClassParameters kickParams {
         featureWeightScale * 0.05, // topWeight
         featureWeightScale * 1.0,  // lowWeight
         featureWeightScale * 1.0,  // decayWeight - the one feature that cleanly separates kicks
-        zcrWeight
+        zcrWeight,                 // zcrWeight - kicks keep the unfiltered rate
+        0.0                        // highpassZcrWeight
     }
 };
 
@@ -160,6 +173,9 @@ const DrumClassParameters snareParams {
     // Two-sided: snares sit between the other two, so straying in either
     // direction is evidence against, not for.
     { 0.0845,  0.0528 },  // TransientZCR
+    // PLACEHOLDER - copied from TransientZCR until the batch sweep measures it.
+    // Snares have little sub, so the highpass should move this only slightly.
+    { 0.1121,  0.0623 },  // HighpassZCR
 
     {
         0.0,                       // centroidWeight - superseded by the no-bass version below
@@ -168,7 +184,8 @@ const DrumClassParameters snareParams {
         featureWeightScale * 1.6,  // topWeight
         featureWeightScale * 0.7,  // lowWeight
         featureWeightScale * 0.5,  // decayWeight - overlaps the hat distribution
-        zcrWeight
+        0.0,                       // zcrWeight - superseded by the highpassed rate
+        zcrWeight                  // highpassZcrWeight
     }
 };
 
@@ -184,6 +201,9 @@ const DrumClassParameters hatParams {
     // Crossing rate is the clearest separator hats have: 0.38 against 0.09 for
     // snares and 0.02 for kicks. Nothing is too busy to be a hat.
     { 0.3390,  0.1028, FeatureDirection::higherIsBetter },  // TransientZCR
+    // PLACEHOLDER - copied from TransientZCR until the batch sweep measures it.
+    // Hats have almost no sub, so the highpass should move this only slightly.
+    { 0.3833,  0.1000, FeatureDirection::higherIsBetter },  // HighpassZCR
 
     {
         0.0,                       // centroidWeight - superseded by the no-bass version below
@@ -192,7 +212,8 @@ const DrumClassParameters hatParams {
         featureWeightScale * 1.0,  // topWeight
         featureWeightScale * 0.1,  // lowWeight
         featureWeightScale * 0.5,  // decayWeight - hat and snare decay overlap, so weight it lightly
-        zcrWeight
+        0.0,                       // zcrWeight - superseded by the highpassed rate
+        zcrWeight                  // highpassZcrWeight
     }
 };
 
@@ -306,14 +327,14 @@ public:
     /** The features a batch run reports mean and standard deviation for, in the
         same order as the CSV's value columns.
     */
-    static constexpr int numTrackedFeatures = 8;
+    static constexpr int numTrackedFeatures = 9;
     static const char* const trackedFeatureNames[numTrackedFeatures];
 
     static std::array<double, numTrackedFeatures> toFeatureArray (const PooledHitFeatures& f)
     {
         return { f.meanCentroid, f.centroidDelta, f.topEndHeavyRatio,
                  f.lowEndHeavyRatio, f.decayRatio, f.deltaEnergyWeight, f.transientZcr,
-                 f.meanCentroidNoBass };
+                 f.meanCentroidNoBass, f.highpassZcr };
     }
 
     /** Running mean and variance per feature, so a batch run can report spread
@@ -373,6 +394,13 @@ private:
     static float computeSchmittZeroCrossingRateInRange(const juce::AudioBuffer<float>& buffer,
                                                        int startSample, int endSample);
 
+    /** The transient ZCR taken after a steep linear-phase highpass at
+        highpassZcrCutoffHz, so the crossing rate reflects the content above the
+        bass rather than being pinned low by a kick's fundamental.
+    */
+    static float computeHighpassedTransientZcr(const juce::AudioBuffer<float>& buffer, int length,
+                                               int transientStart, double sampleRate);
+
     /** Where the hit's transient begins, found with an envelope follower over the
         already-extracted hit. Returns transientZcrFallbackStart when the envelope
         never rises - a hit segmented out of a sustained passage is already loud at
@@ -396,6 +424,7 @@ private:
         HitClassifier::totalFeatures.deltaEnergyWeight += f.deltaEnergyWeight;
         HitClassifier::totalFeatures.transientZcr += f.transientZcr;
         HitClassifier::totalFeatures.meanCentroidNoBass += f.meanCentroidNoBass;
+        HitClassifier::totalFeatures.highpassZcr += f.highpassZcr;
 
         // Every hit that gets a CSV row also lands here, so a batch run can
         // summarise exactly the rows it appended.

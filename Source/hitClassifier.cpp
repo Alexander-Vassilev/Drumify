@@ -8,7 +8,7 @@ HitClassifier::FeatureStats HitClassifier::batchStats {};
 const char* const HitClassifier::trackedFeatureNames[HitClassifier::numTrackedFeatures]
 {
     "MeanCentroid", "Delta", "TopEndHeavyRatio", "LowEndHeavyRatio", "HighLowDecayRatio",
-    "EnergyWeight", "TransientZCR", "CentroidNoBass"
+    "EnergyWeight", "TransientZCR", "CentroidNoBass", "HighpassZCR"
 };
 
 float HitClassifier::computeRMS(const juce::AudioBuffer<float>& buffer, int length)
@@ -127,6 +127,102 @@ float HitClassifier::computeSchmittZeroCrossingRateInRange(const juce::AudioBuff
     return static_cast<float>(crossings) / static_cast<float>(span);
 }
 
+/** Windowed-sinc FIR highpass. Linear phase by construction (the kernel is
+    symmetric), so every frequency is delayed by exactly the same amount - the
+    centre tap - and that delay is taken back out at the point of use, leaving
+    the transient where findTransientStart put it.
+
+    Built as a lowpass and spectrally inverted (negate, then add one to the
+    centre tap), which turns a windowed-sinc lowpass into the complementary
+    highpass. Blackman gives a transition of about 5.5/N of the sample rate:
+    118 Hz at 2047 taps and 44.1 kHz, with the stopband down over 70 dB.
+*/
+static const std::vector<float>& getHighpassZcrKernel(double sampleRate)
+{
+    static std::vector<float> kernel;
+    static double kernelSampleRate = 0.0;
+
+    if (kernelSampleRate == sampleRate && ! kernel.empty())
+        return kernel;
+
+    constexpr int taps = highpassZcrFirTaps;
+    constexpr int centre = taps / 2;
+
+    kernel.assign(taps, 0.0f);
+
+    const double fc = (double)highpassZcrCutoffHz / sampleRate;   // cycles per sample
+    double dcGain = 0.0;
+
+    for (int n = 0; n < taps; ++n)
+    {
+        const double k = (double)(n - centre);
+        const double sinc = k == 0.0 ? 2.0 * fc
+                                     : std::sin(2.0 * juce::MathConstants<double>::pi * fc * k)
+                                         / (juce::MathConstants<double>::pi * k);
+
+        const double phase = 2.0 * juce::MathConstants<double>::pi * (double)n / (double)(taps - 1);
+        const double blackman = 0.42 - 0.5 * std::cos(phase) + 0.08 * std::cos(2.0 * phase);
+
+        kernel[n] = (float)(sinc * blackman);
+        dcGain += kernel[n];
+    }
+
+    // Unity DC gain on the lowpass, so the inverted highpass has exactly zero.
+    for (auto& tap : kernel)
+        tap = (float)(-tap / dcGain);
+
+    kernel[centre] += 1.0f;
+
+    kernelSampleRate = sampleRate;
+    return kernel;
+}
+
+float HitClassifier::computeHighpassedTransientZcr(const juce::AudioBuffer<float>& buffer, int length,
+                                                    int transientStart, double sampleRate)
+{
+    length = juce::jmin(length, buffer.getNumSamples());
+
+    const int windowStart = juce::jmax(0, transientStart);
+    const int windowEnd = juce::jmin(length, transientStart + transientZcrWindowLength);
+    const int windowLength = windowEnd - windowStart;
+
+    if (windowLength <= 1)
+        return 0.0f;
+
+    const auto& kernel = getHighpassZcrKernel(sampleRate > 0.0 ? sampleRate : 44100.0);
+    const int taps = (int)kernel.size();
+    const int centre = taps / 2;
+
+    const float* input = buffer.getReadPointer(0);
+
+    // Only the window is needed, so only the window is filtered: each output
+    // sample is the kernel centred on the matching input sample, which is the
+    // delay compensation. Reads past either end of the hit see silence.
+    juce::AudioBuffer<float> filtered(1, windowLength);
+    float* output = filtered.getWritePointer(0);
+
+    for (int k = 0; k < windowLength; ++k)
+    {
+        const int inputCentre = windowStart + k;
+        double acc = 0.0;
+
+        for (int j = 0; j < taps; ++j)
+        {
+            const int i = inputCentre + (j - centre);
+
+            if (i >= 0 && i < length)
+                acc += (double)kernel[j] * (double)input[i];
+        }
+
+        output[k] = (float)acc;
+    }
+
+    // Plain sign-change counting rather than the Schmitt version: the highpass
+    // has already stripped the sub that the hysteresis was guarding against,
+    // and its fixed 0.02 threshold would sit above much of what is left.
+    return computeZeroCrossingRateInRange(filtered, 0, windowLength);
+}
+
 int HitClassifier::findTransientStart(const juce::AudioBuffer<float>& buffer, int length, double sampleRate)
 {
     length = juce::jmin(length, buffer.getNumSamples());
@@ -218,6 +314,10 @@ HitFeatures HitClassifier::extractFeatures(const juce::AudioBuffer<float>& buffe
     DBG("ZCR calc starts: " << transientStart);
     f.transientZcr = computeSchmittZeroCrossingRateInRange(buffer, transientStart,
                                                            transientStart + transientZcrWindowLength);
+
+    // The same measurement with everything below 150 Hz removed first, so a
+    // kick's fundamental cannot hold the crossing rate down on its own.
+    f.highpassZcr = computeHighpassedTransientZcr(buffer, length, transientStart, sampleRate);
     
     DBG("length: " << f.durationSec);
     
@@ -362,12 +462,13 @@ double HitClassifier::calculateClassLikelihood(const PooledHitFeatures& f, const
     double pLow      = calculateGaussianPDF(f.lowEndHeavyRatio, params.lowEndHeavy);
     double pDecay    = calculateGaussianPDF(f.decayRatio,       params.decayRatio);
     double pZcr      = calculateGaussianPDF(f.transientZcr,     params.transientZcr);
+    double pHpZcr    = calculateGaussianPDF(f.highpassZcr,      params.highpassZcr);
 
     // No clamping needed: calculateGaussianPDF already tops out at 1.0.
 
     DBG (juce::String::formatted (
-        "pCentroid: %-6.2f | pCentroidNoBass: %-6.2f | pDelta: %-6.2f | pTopEndHeavyRatio: %-6.2f | pLowEndHeavyRatio: %-6.2f | pHighLowDecayRatio: %-6.2f | pTransientZCR: %-6.2f",
-        pCentroid, pNoBass, pDelta, pTop, pLow, pDecay, pZcr
+        "pCentroid: %-6.2f | pCentroidNoBass: %-6.2f | pDelta: %-6.2f | pTopEndHeavyRatio: %-6.2f | pLowEndHeavyRatio: %-6.2f | pHighLowDecayRatio: %-6.2f | pTransientZCR: %-6.2f | pHighpassZCR: %-6.2f",
+        pCentroid, pNoBass, pDelta, pTop, pLow, pDecay, pZcr, pHpZcr
     ));
 
     double wCentroid = std::pow(pCentroid, params.weights.centroidWeight);
@@ -377,9 +478,10 @@ double HitClassifier::calculateClassLikelihood(const PooledHitFeatures& f, const
     double wLow      = std::pow(pLow,      params.weights.lowWeight);
     double wDecay    = std::pow(pDecay,    params.weights.decayWeight);
     double wZcr      = std::pow(pZcr,      params.weights.zcrWeight);
+    double wHpZcr    = std::pow(pHpZcr,    params.weights.highpassZcrWeight);
 
     // Naive Bayes Assumption: Multiply the independent feature probabilities together
-    return wCentroid * wNoBass * wDelta * wTop * wLow * wDecay * wZcr;
+    return wCentroid * wNoBass * wDelta * wTop * wLow * wDecay * wZcr * wHpZcr;
 }
 
 // Heuristic classification:
@@ -534,6 +636,7 @@ HitType HitClassifier::classify(const HitFeatures& f, std::ofstream& csvFile)
             // Time-domain, so it is carried straight across from extractFeatures
             // rather than pooled over the STFT frames.
             pooledFeatures.transientZcr = f.transientZcr;
+            pooledFeatures.highpassZcr = f.highpassZcr;
             
             DBG (juce::String::formatted (
                 "Decay -> Lows: %-5.2f | Highs: %-5.2f | Ratio (L/H): %-5.2f",
@@ -568,7 +671,8 @@ HitType HitClassifier::classify(const HitFeatures& f, std::ofstream& csvFile)
                     << pooledFeatures.decayRatio << ","
                     << pooledFeatures.deltaEnergyWeight << ","
                     << pooledFeatures.transientZcr << ","
-                    << pooledFeatures.meanCentroidNoBass << std::endl;
+                    << pooledFeatures.meanCentroidNoBass << ","
+                    << pooledFeatures.highpassZcr << std::endl;
         }
         
         DBG("Hat Probabilities:");

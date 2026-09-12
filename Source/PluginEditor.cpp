@@ -1324,7 +1324,8 @@ void HackBrownAudioProcessorEditor::loadDrumLoopFromDisk()
                 << HitClassifier::totalFeatures.decayRatio << ","
                 << HitClassifier::totalFeatures.deltaEnergyWeight << ","
                 << HitClassifier::totalFeatures.transientZcr << ","
-                << HitClassifier::totalFeatures.meanCentroidNoBass << std::endl;
+                << HitClassifier::totalFeatures.meanCentroidNoBass << ","
+                << HitClassifier::totalFeatures.highpassZcr << std::endl;
     }
 }
 
