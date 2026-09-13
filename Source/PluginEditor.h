@@ -42,8 +42,7 @@ namespace DrumifyLayout
     // scale so the type size stays consistent across the whole UI.
     constexpr float labelScale = 0.52f;
 
-    // Top row
-    constexpr int titleX = 40, titleY = 25, titleW = 410, titleH = 95;
+    // Top row. The title is a canvas-aligned layer; only the icons need placing.
     constexpr int menuRight = 1150, menuCentreY = 60, menuIconHeight = 58, menuGap = 34;
 
     // The drum layers are exported already aligned to the canvas, so they are

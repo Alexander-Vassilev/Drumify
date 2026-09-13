@@ -21,10 +21,10 @@ namespace BinaryData
     const int            Snare_wavSize = 59144;
 
     extern const char*   About_png;
-    const int            About_pngSize = 16050;
+    const int            About_pngSize = 12387;
 
     extern const char*   SettingsMenuStatic_png;
-    const int            SettingsMenuStatic_pngSize = 80622;
+    const int            SettingsMenuStatic_pngSize = 70643;
 
     extern const char*   SliderStrip_png;
     const int            SliderStrip_pngSize = 602875;
@@ -99,7 +99,7 @@ namespace BinaryData
     const int            CapsuleBack_pngSize = 68128;
 
     extern const char*   DrumifyTitle_png;
-    const int            DrumifyTitle_pngSize = 18646;
+    const int            DrumifyTitle_pngSize = 13058;
 
     extern const char*   DrumkitKick_png;
     const int            DrumkitKick_pngSize = 40722;

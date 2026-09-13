@@ -1246,21 +1246,19 @@ void HackBrownAudioProcessorEditor::paint (juce::Graphics& g)
     // The paper backdrop stays put; everything sitting on it slides.
     assets.background.drawFrame (g, getLocalBounds().toFloat());
 
-    assets.title.drawContent (g, juce::Rectangle<float> ((float) DrumifyLayout::titleX,
-                                                         (float) DrumifyLayout::titleY,
-                                                         (float) DrumifyLayout::titleW,
-                                                         (float) DrumifyLayout::titleH)
-                                   .translated (slideProgress * (float) getWidth(), 0.0f));
-
+    // The title is canvas-aligned, like the page headings that replace it.
+    assets.title.drawFrame (g, getLocalBounds().toFloat()
+                                 .translated (slideProgress * (float) getWidth(), 0.0f));
 }
 
 void HackBrownAudioProcessorEditor::resized()
 {
     using namespace DrumifyLayout;
 
-    // Everything except the "?" and "+" rides this offset: zero at rest, a full
-    // width right with the about page open, a full width left with settings.
-    // Off-window bounds also stop the hidden controls seeing the mouse.
+    // Everything rides this offset: zero at rest, a full width right with the
+    // about page open, a full width left with settings. The one exception is
+    // the icon that closes the open page. Off-window bounds also stop the
+    // hidden controls seeing the mouse.
     const auto shift = juce::roundToInt (slideProgress * (float) getWidth());
 
     // The drum layers are canvas-aligned, so this covers the whole editor and
@@ -1308,9 +1306,12 @@ void HackBrownAudioProcessorEditor::resized()
 
     for (size_t i = 0; i < widths.size(); ++i)
     {
-        // The "?" and "+" stay put while the rest slides away - each is the way
-        // back from the page it opens.
-        const auto iconShift = (icons[i].first == &questionButton || icons[i].first == &plusButton) ? 0 : shift;
+        // The icon that opened a page stays put as the way back from it; the
+        // other two leave with the controls. "?" holds its place while the
+        // about page is in view (a positive slide), "+" while settings is.
+        const bool holds = (icons[i].first == &questionButton && slideProgress > 0.0f)
+                        || (icons[i].first == &plusButton     && slideProgress < 0.0f);
+        const auto iconShift = holds ? 0 : shift;
 
         icons[i].first->setBounds (x - padding + iconShift, menuCentreY - menuIconHeight / 2 - padding,
                                    widths[i] + padding * 2, menuIconHeight + padding * 2);
