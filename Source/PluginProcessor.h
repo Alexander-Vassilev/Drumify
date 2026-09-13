@@ -110,6 +110,14 @@ public:
     void reconstructLoopFromHits();
     void getLongestSampleLengthInSamples();
 
+    /** The classified hits with their final timing: the analysis result from
+        inputProcessor.classifiedHits, copied, with quantisation applied to
+        onsetSample. Both the renderer and the MIDI export take their timing
+        from here, so the .wav and the .mid always agree. The originals are
+        never modified, so the grid can be changed or switched off again.
+    */
+    std::vector<ClassifiedHit> getTimedHits() const;
+
     /** Starts playback of either the captured input or the rendered drum loop. */
     void startPreview (PreviewSource source);
 
@@ -132,6 +140,14 @@ public:
     bool replaceHat = true;
 
     bool shouldReplaceNote (int midiNote) const;
+
+    // Quantisation, as set from the settings page and read by getTimedHits().
+    // Already in real units - the page converts from its knob positions - so
+    // the timing code never sees a slider. Message thread only.
+    bool   quantizeEnabled  = false;
+    double quantizeBpm      = 120.0;
+    double quantizeDivision = 1.0 / 16.0;   // grid step as a fraction of a whole note
+    double swingAmount      = 0.0;          // 0 straight .. 1 full swing
 
     static constexpr double unreplacedHitFadeInSeconds = 0.000;
     static constexpr double unreplacedHitFadeOutSeconds = 0.005;
@@ -214,6 +230,7 @@ private:
     static constexpr double maxCapturedInputSeconds = 60.0;
     juce::AudioBuffer<float> capturedInput;
     std::atomic<int> capturedInputLength { 0 };
+    int startSample = 0; // The sample number of the first hit in the input
     bool wasRecording = false;   // audio thread only; detects the start of a take
     int renderedReadPos = 0;
     bool isPlayingRendered = false;

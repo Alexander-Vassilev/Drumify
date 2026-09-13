@@ -899,6 +899,7 @@ namespace
     constexpr int captionRight[] { 0, 0, 0, 0, 758, 758, 662, 579, 0, 1172 };
 
     const char* const quantizeNames[] { "1/32", "1/16 t", "1/16", "1/8 t", "1/8", "1/4 t", "1/4" };
+    constexpr double quantizeDivisions[] { 1.0 / 32, 1.0 / 24, 1.0 / 16, 1.0 / 12, 1.0 / 8, 1.0 / 6, 1.0 / 4 };
     constexpr int numQuantizeSteps = 7;
 
     constexpr float disabledOpacity = 0.3f;
@@ -1056,7 +1057,7 @@ void SettingsPageComponent::mouseUp (const juce::MouseEvent&)
 
     // A slider only reaches the processor when the drag ends: re-rendering the
     // loop on every mouse-move would be far too heavy.
-    const bool affectsProcessor = (dragging == stretch);
+    const bool affectsProcessor = (dragging != sensitivity);
     dragging = -1;
 
     if (affectsProcessor)
@@ -1100,6 +1101,15 @@ void SettingsPageComponent::applyToProcessor (bool rerender)
         processor.playbackSpeed = (float) (0.1 * std::pow (100.0, (double) value[stretch]));
     else
         processor.playbackSpeed = 1.0f;
+
+    // Quantisation, converted from knob positions to real units here so the
+    // processor never has to know the sliders' ranges. The BPM is the selected
+    // one for now; the host and file sources have nothing to supply yet.
+    processor.quantizeEnabled  = checked[quantize];
+    processor.quantizeBpm      = 10.0 + (double) value[bpm] * 210.0;
+    processor.quantizeDivision = quantizeDivisions[juce::jlimit (0, numQuantizeSteps - 1,
+                                                                juce::roundToInt (value[quantizeAmount] * (numQuantizeSteps - 1)))];
+    processor.swingAmount      = checked[swing] ? (double) value[swingAmount] : 0.0;
 
     if (rerender && ! processor.inputProcessor.classifiedHits.empty())
     {
@@ -1668,7 +1678,7 @@ static constexpr int generalMidiDrumChannel = 10;
 
 bool HackBrownAudioProcessorEditor::writeMidiTo (const juce::File& destination, bool reportFailures)
 {
-    const auto& hits = audioProcessor.inputProcessor.classifiedHits;
+    const auto hits = audioProcessor.getTimedHits();
 
     if (hits.empty())
     {

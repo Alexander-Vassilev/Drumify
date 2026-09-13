@@ -837,13 +837,41 @@ juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
     return new HackBrownAudioProcessor();
 }
 
+std::vector<ClassifiedHit> HackBrownAudioProcessor::getTimedHits() const
+{
+    std::vector<ClassifiedHit> timed = inputProcessor.classifiedHits;
+
+    if (quantizeEnabled) {
+        DBG("Quantising!");
+        int quantizeUnitInSamples = (60.0f / quantizeBpm) * quantizeDivision * 4 * currentSampleRate;
+        int halfQuantizeUnit = quantizeUnitInSamples >> 1;
+        int numRemovedHits = 0;
+        
+        for (auto& hit : timed) {
+            hit.hitIndex -= numRemovedHits;
+            int relativeStartSample = hit.onsetSample - startSample;
+            int unitIndex = std::floor(static_cast<float>(relativeStartSample) / static_cast<float>(quantizeUnitInSamples));
+            int startingSample = unitIndex * quantizeUnitInSamples;
+            if (relativeStartSample - startingSample > halfQuantizeUnit) startingSample += quantizeUnitInSamples;
+            hit.onsetSample = startingSample + startSample;
+        }
+    }
+    
+    // Quantisation goes here: move each hit's onsetSample onto the grid. Work
+    // in seconds relative to the first hit (the loop's origin), and round back
+    // to a sample index once at the end. Stretching is applied downstream by
+    // the renderer and the MIDI writer, so snap in the original tempo.
+
+    return timed;
+}
+
 void HackBrownAudioProcessor::buildDrumBuffer() {
     std::vector<DrumEventAbs> events;
     const double sr = currentSampleRate;
     int lastSampleHit = 0;
     float lastSize = 0;
 
-    for (auto processedHit : inputProcessor.classifiedHits) {
+    for (auto processedHit : getTimedHits()) {
         lastSampleHit = processedHit.onsetSample;
         lastSize = processedHit.durationSec;
         DBG("while adding processed hits, this is type: " << (int)processedHit.type);
