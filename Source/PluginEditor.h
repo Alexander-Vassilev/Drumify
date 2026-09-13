@@ -59,8 +59,9 @@ namespace DrumifyLayout
     constexpr int micCentreX = 600, micFrameSize = 420;
     constexpr int micTop = 215;   // top of the component, i.e. above the label
 
-    // The about page, which slides in from the left over the centre of the plugin
-    constexpr int infoPageX = 250, infoPageY = 84, infoPageW = 700, infoPageH = 556;
+    // The about page is canvas-aligned artwork - its heading sits in the title
+    // slot - with the scrolling copy in a column over the centre, below it.
+    constexpr int aboutBodyX = 250, aboutBodyY = 142, aboutBodyW = 700, aboutBodyH = 498;
 
     // The speaker and save layers are canvas-aligned too; only their captions
     // need placing.
@@ -125,6 +126,13 @@ struct DrumifyAssets
 
     AssetLayer savePaint, saveKeyboard, saveLoop;
     AssetLayer labelSaveOutput, labelSaveMidi, labelSaveAudio;
+
+    // The settings page: its static artwork, the checkmark stamped onto a
+    // ticked box, and the slider as a vertical strip of every knob position.
+    AssetLayer settingsMenu, checkmark, sliderStrip;
+
+    // The about page's heading, in the title slot.
+    AssetLayer about;
 };
 
 //==============================================================================
@@ -331,19 +339,72 @@ private:
 };
 
 //==============================================================================
-/** The scrollable "about" text that slides in when the "?" is clicked. */
+/** The about page that slides in when the "?" is clicked: the heading artwork
+    with the scrollable copy beneath it.
+*/
 class InfoPageComponent : public juce::Component
 {
 public:
-    InfoPageComponent();
+    explicit InfoPageComponent (const DrumifyAssets&);
 
     void paint (juce::Graphics&) override;
     void resized() override;
+    bool hitTest (int x, int y) override;
 
 private:
+    const DrumifyAssets& assets;
     juce::TextEditor body;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (InfoPageComponent)
+};
+
+//==============================================================================
+/** The settings page. The labels and empty boxes are one static image; the
+    checkmarks, sliders and value readouts are drawn over it from state held
+    here. Only the replace toggles and the stretch factor drive anything yet -
+    the rest is interaction without effect, until the features behind it exist.
+*/
+class SettingsPageComponent : public juce::Component
+{
+public:
+    SettingsPageComponent (const DrumifyAssets&, HackBrownAudioProcessor&);
+
+    void paint (juce::Graphics&) override;
+
+    bool hitTest (int x, int y) override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+
+private:
+    enum Check { kicks, snares, hats, quantize, lockHost, lockFile, selectBpm, swing,
+                 stretchOutput, musicalStretch, numChecks };
+    enum Slide { sensitivity, quantizeAmount, bpm, swingAmount, stretch, numSlides };
+
+    /** Whether a control can currently be used, per the page's enabling rules. */
+    bool isEnabled (Check) const;
+    bool isEnabled (Slide) const;
+
+    int checkAt (juce::Point<int>) const;   // index, or -1
+    int slideAt (juce::Point<int>) const;
+
+    void toggle (Check);
+    void setSlider (Slide, float value);
+    float valueForX (Slide, int x) const;
+
+    juce::String readout (Slide) const;
+
+    /** Pushes the toggles and stretch factor into the processor. */
+    void applyToProcessor (bool rerender);
+
+    const DrumifyAssets& assets;
+    HackBrownAudioProcessor& processor;
+
+    std::array<bool, numChecks> checked {};
+    std::array<float, numSlides> value {};   // 0..1, the knob's position
+    int dragging = -1;                        // Slide being dragged, or -1
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SettingsPageComponent)
 };
 
 //==============================================================================
@@ -401,12 +462,13 @@ private:
     /** Scratch folder holding files handed to the host by drag-and-drop. */
     juce::File getDragExportFolder() const;
 
-    /** Slides the main controls out to the right and the about text in from the
-        left, or back again. Driven by the timer below.
+    /** Slides the main controls out to one side and a page in from the other,
+        or back again. The about page comes in from the left, settings from the
+        right; opening either closes the other. Driven by the timer below.
     */
     void toggleInfoPage();
+    void toggleSettingsPage();
     void timerCallback() override;
-    void showSettingsPopup();
     void toggleRecording();
     void loadDrumSample (DrumType);
 
@@ -438,11 +500,13 @@ private:
     AssetButton plusButton     { assets.menuPlus,     "Settings" };
     AssetButton questionButton { assets.menuQuestion, "About" };
 
-    InfoPageComponent infoPage;
+    InfoPageComponent infoPage { assets };
+    SettingsPageComponent settingsPage { assets, audioProcessor };
 
-    // 0 = main controls centred, 1 = about page centred.
+    // -1 = settings page centred, 0 = main controls centred, +1 = about page.
     float slideProgress = 0.0f;
     bool infoPageVisible = false;
+    bool settingsPageVisible = false;
 
     DrumKitComponent drumKit { assets };
     SpeakerComponent speakers { assets };

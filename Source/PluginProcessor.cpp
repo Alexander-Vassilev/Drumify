@@ -97,7 +97,6 @@ void HackBrownAudioProcessor::changeProgramName(int index, const juce::String& n
 
 void HackBrownAudioProcessor::reset()
 {
-    // ... other resets ...
     isFifoFilled = true;
     currSampleInFile = 0;
     samplesAccumulated = 0;
@@ -761,7 +760,15 @@ void HackBrownAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
     // A fresh take starts a fresh capture. Edge-detected here rather than in the
     // editor so it stays in step with what the audio thread actually recorded.
     if (recording && ! wasRecording)
+    {
         capturedInputLength.store(0);
+
+        // A new take replaces the last one, as an uploaded loop does. Without
+        // this, storedHitsIndex and currSampleInFile carry on from where the
+        // previous take stopped, so its hits are appended after the old ones.
+        // Nothing in reset() allocates, so it is safe here on the audio thread.
+        reset();
+    }
 
     wasRecording = recording;
 

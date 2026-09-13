@@ -11,8 +11,7 @@
 #include "hitClassifier.h"
 
 //==============================================================================
-// The copy shown by the "?" button in the top row. Replace this with the real
-// text - it is the only thing the info popup renders.
+// The copy shown on the about page behind the "?" button in the top row.
 static const char* const infoPanelText =
     "Welcome to Drumify! This is an experience that lets you transform any drumloop to your "
     "heart's desire. Beatbox into the microphone or import loops of your own and Drumify's "
@@ -306,6 +305,11 @@ DrumifyAssets::DrumifyAssets()
     saveLoop.load        (BinaryData::SaveLoop_png,        BinaryData::SaveLoop_pngSize);
     labelSaveMidi.load   (BinaryData::SaveMIDI_png,        BinaryData::SaveMIDI_pngSize);
     labelSaveAudio.load  (BinaryData::SaveAudio_png,       BinaryData::SaveAudio_pngSize);
+
+    settingsMenu.load (BinaryData::SettingsMenuStatic_png, BinaryData::SettingsMenuStatic_pngSize);
+    checkmark.load    (BinaryData::Checkmark_png,          BinaryData::Checkmark_pngSize);
+    sliderStrip.load  (BinaryData::SliderStrip_png,        BinaryData::SliderStrip_pngSize);
+    about.load        (BinaryData::About_png,              BinaryData::About_pngSize);
     labelSaveOutput.load (BinaryData::SaveSaveOutput_png,  BinaryData::SaveSaveOutput_pngSize);
 }
 
@@ -825,7 +829,8 @@ void MicrophoneComponent::paint (juce::Graphics& g)
 }
 
 //==============================================================================
-InfoPageComponent::InfoPageComponent()
+InfoPageComponent::InfoPageComponent (const DrumifyAssets& a)
+    : assets (a)
 {
     body.setMultiLine (true);
     body.setReadOnly (true);
@@ -844,128 +849,316 @@ InfoPageComponent::InfoPageComponent()
 
 void InfoPageComponent::paint (juce::Graphics& g)
 {
-    g.setColour (DrumifyTheme::ink);
-    g.setFont (DrumifyTheme::mono (32.0f, true));
-    g.drawText ("About Drumify", getLocalBounds().removeFromTop (46),
-                juce::Justification::centred);
+    assets.about.drawFrame (g, getLocalBounds().toFloat());
 }
 
 void InfoPageComponent::resized()
 {
-    auto area = getLocalBounds();
-    area.removeFromTop (58);
-    body.setBounds (area);
+    using namespace DrumifyLayout;
+    body.setBounds (aboutBodyX, aboutBodyY, aboutBodyW, aboutBodyH);
 }
 
-//==============================================================================
-/** The contents of the "+" popup. Add further options here. */
-class SettingsPanel : public juce::Component
+bool InfoPageComponent::hitTest (int x, int y)
 {
-public:
-    explicit SettingsPanel (HackBrownAudioProcessor& p)
-        : processor (p)
+    // The page covers the whole canvas, but only the copy takes the mouse, so
+    // the "?" that closes it stays clickable underneath.
+    return body.getBounds().contains (x, y);
+}
+//==============================================================================
+namespace
+{
+    // Everything below is in canvas coordinates, read off the SettingsMenuFull
+    // reference: the ten boxes are 37x37 and the five slider slots are where
+    // frame 0 of the slider strip (knob fully left) sits in that image.
+    constexpr int checkBoxSize = 37;
+
+    const juce::Point<int> checkBoxOrigins[] {
+        { 107, 261 }, { 107, 313 }, { 107, 365 },                          // kicks, snares, hats
+        { 449, 210 }, { 449, 338 }, { 449, 390 }, { 449, 442 }, { 449, 569 }, // quantize, host, file, select, swing
+        { 876, 208 }, { 876, 336 }                                          // stretch output, musical stretch
+    };
+
+    // The strip is 221 frames of 315x31; the knob's centre runs from x=17 in
+    // frame 0 to x=299 in the last, both measured from the slot's left edge,
+    // and moves evenly enough between them for a linear value-to-frame map.
+    constexpr int sliderFrames = 221;
+    constexpr int sliderWidth = 315, sliderHeight = 31;
+    constexpr float knobTravelStart = 17.0f, knobTravelEnd = 299.0f;
+
+    const juce::Point<int> sliderOrigins[] {
+        { 33, 475 }, { 450, 263 }, { 450, 496 }, { 450, 623 }, { 867, 265 }
+    };
+
+    // Where the "xx" placeholders sit under the three sliders that have one.
+    const juce::Point<int> readoutCentres[] {
+        { 0, 0 }, { 595, 313 }, { 595, 545 }, { 0, 0 }, { 1016, 313 }
+    };
+
+    // Right edge of each box's caption in the static artwork, for the checks
+    // that can be disabled. The caption fades with its box.
+    constexpr int captionRight[] { 0, 0, 0, 0, 758, 758, 662, 579, 0, 1172 };
+
+    const char* const quantizeNames[] { "1/32", "1/16 t", "1/16", "1/8 t", "1/8", "1/4 t", "1/4" };
+    constexpr int numQuantizeSteps = 7;
+
+    constexpr float disabledOpacity = 0.3f;
+}
+
+SettingsPageComponent::SettingsPageComponent (const DrumifyAssets& a, HackBrownAudioProcessor& p)
+    : assets (a), processor (p)
+{
+    setMouseCursor (juce::MouseCursor::PointingHandCursor);
+
+    // The three replace toggles mirror the processor rather than defaulting
+    // here, so reopening the page always shows what is actually in force.
+    checked[kicks]  = processor.replaceKick;
+    checked[snares] = processor.replaceSnare;
+    checked[hats]   = processor.replaceHat;
+
+    // Musically sensible resting positions. Stretch must start at 1x - it is
+    // wired to playbackSpeed, and ticking "Stretch output" should not warp the
+    // loop until the knob is moved.
+    value[sensitivity]    = 0.5f;
+    value[quantizeAmount] = 2.0f / (numQuantizeSteps - 1);   // 1/16
+    value[bpm]            = (120.0f - 10.0f) / 210.0f;        // 120 BPM
+    value[swingAmount]    = 0.0f;
+    value[stretch]        = 0.5f;                             // 1x on the log scale
+}
+
+bool SettingsPageComponent::isEnabled (Check c) const
+{
+    switch (c)
     {
-        speedLabel.setText ("Playback speed", juce::dontSendNotification);
-        speedLabel.setFont (DrumifyTheme::mono (13.0f));
-        addAndMakeVisible (speedLabel);
+        case lockHost: case lockFile: case selectBpm: case swing:
+            return checked[quantize];
+        case musicalStretch:
+            return checked[stretchOutput];
+        default:
+            return true;
+    }
+}
 
-        speedSlider.setSliderStyle (juce::Slider::LinearHorizontal);
-        speedSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 58, 20);
-        speedSlider.setRange (0.25, 2.0, 0.01);
-        speedSlider.setValue (processor.playbackSpeed, juce::dontSendNotification);
-        speedSlider.onValueChange = [this] { processor.playbackSpeed = (float) speedSlider.getValue(); };
-        addAndMakeVisible (speedSlider);
+bool SettingsPageComponent::isEnabled (Slide sl) const
+{
+    switch (sl)
+    {
+        case quantizeAmount: return checked[quantize];
+        case bpm:            return checked[quantize] && checked[selectBpm];
+        case swingAmount:    return checked[quantize] && checked[swing];
+        case stretch:        return checked[stretchOutput];
+        default:             return true;
+    }
+}
 
-        previewButton.onClick = [this]
+int SettingsPageComponent::checkAt (juce::Point<int> p) const
+{
+    for (int i = 0; i < numChecks; ++i)
+        if (juce::Rectangle<int> (checkBoxOrigins[i], checkBoxOrigins[i].translated (checkBoxSize, checkBoxSize)).contains (p))
+            return i;
+
+    return -1;
+}
+
+int SettingsPageComponent::slideAt (juce::Point<int> p) const
+{
+    for (int i = 0; i < numSlides; ++i)
+        if (juce::Rectangle<int> (sliderOrigins[i], sliderOrigins[i].translated (sliderWidth, sliderHeight))
+              .expanded (0, 6).contains (p))
+            return i;
+
+    return -1;
+}
+
+bool SettingsPageComponent::hitTest (int x, int y)
+{
+    // Only live controls take the mouse, so the pointing hand and the clicks
+    // both stop at anything drawn at low opacity.
+    const juce::Point<int> p { x, y };
+
+    if (const int c = checkAt (p); c >= 0)
+        return isEnabled ((Check) c);
+
+    if (const int sl = slideAt (p); sl >= 0)
+        return isEnabled ((Slide) sl);
+
+    return false;
+}
+
+void SettingsPageComponent::toggle (Check c)
+{
+    if (! isEnabled (c))
+        return;
+
+    // The three BPM sources are exclusive: ticking one clears the others.
+    if (c == lockHost || c == lockFile || c == selectBpm)
+    {
+        const bool turningOn = ! checked[c];
+        checked[lockHost] = checked[lockFile] = checked[selectBpm] = false;
+        checked[c] = turningOn;
+    }
+    else
+    {
+        checked[c] = ! checked[c];
+    }
+
+    applyToProcessor (true);
+    repaint();
+}
+
+float SettingsPageComponent::valueForX (Slide sl, int x) const
+{
+    const float local = (float) (x - sliderOrigins[sl].x);
+    float v = juce::jlimit (0.0f, 1.0f, (local - knobTravelStart) / (knobTravelEnd - knobTravelStart));
+
+    // The quantize slider is stepped: snap to the nearest of its seven values.
+    if (sl == quantizeAmount)
+        v = std::round (v * (numQuantizeSteps - 1)) / (float) (numQuantizeSteps - 1);
+
+    return v;
+}
+
+void SettingsPageComponent::setSlider (Slide sl, float v)
+{
+    if (value[sl] == v)
+        return;
+
+    value[sl] = v;
+    repaint();
+}
+
+void SettingsPageComponent::mouseDown (const juce::MouseEvent& e)
+{
+    const auto p = e.getPosition();
+
+    if (const int c = checkAt (p); c >= 0)
+    {
+        toggle ((Check) c);
+        return;
+    }
+
+    if (const int sl = slideAt (p); sl >= 0 && isEnabled ((Slide) sl))
+    {
+        dragging = sl;
+        setSlider ((Slide) sl, valueForX ((Slide) sl, p.x));
+    }
+}
+
+void SettingsPageComponent::mouseDrag (const juce::MouseEvent& e)
+{
+    if (dragging >= 0)
+        setSlider ((Slide) dragging, valueForX ((Slide) dragging, e.getPosition().x));
+}
+
+void SettingsPageComponent::mouseUp (const juce::MouseEvent&)
+{
+    if (dragging < 0)
+        return;
+
+    // A slider only reaches the processor when the drag ends: re-rendering the
+    // loop on every mouse-move would be far too heavy.
+    const bool affectsProcessor = (dragging == stretch);
+    dragging = -1;
+
+    if (affectsProcessor)
+        applyToProcessor (true);
+}
+
+juce::String SettingsPageComponent::readout (Slide sl) const
+{
+    const float v = value[sl];
+
+    switch (sl)
+    {
+        case quantizeAmount:
+            return quantizeNames[juce::jlimit (0, numQuantizeSteps - 1, juce::roundToInt (v * (numQuantizeSteps - 1)))];
+
+        case bpm:
+            return juce::String (juce::roundToInt (10.0f + v * 210.0f)) + " BPM";
+
+        case stretch:
+            if (checked[musicalStretch])
+                return juce::String (juce::roundToInt (10.0f + v * 210.0f)) + " BPM";
+
+            // 0.1x to 10x on a log scale, so 1x sits at the centre of the travel.
+            return juce::String (0.1 * std::pow (100.0, (double) v), 2) + "x";
+
+        default:
+            return {};
+    }
+}
+
+void SettingsPageComponent::applyToProcessor (bool rerender)
+{
+    processor.replaceKick  = checked[kicks];
+    processor.replaceSnare = checked[snares];
+    processor.replaceHat   = checked[hats];
+
+    // The stretch factor is exactly playbackSpeed, which already spaces onsets
+    // apart by a factor at render. Musical stretch (to a BPM) is not built yet,
+    // so in that mode - or with stretching off - the loop plays unstretched.
+    if (checked[stretchOutput] && ! checked[musicalStretch])
+        processor.playbackSpeed = (float) (0.1 * std::pow (100.0, (double) value[stretch]));
+    else
+        processor.playbackSpeed = 1.0f;
+
+    if (rerender && ! processor.inputProcessor.classifiedHits.empty())
+    {
+        processor.isPlaybackOn.store (false);   // the render swaps the buffer playAudio reads
+        processor.buildDrumBuffer();
+    }
+}
+
+void SettingsPageComponent::paint (juce::Graphics& g)
+{
+    const auto frame = getLocalBounds().toFloat();
+
+    assets.settingsMenu.drawFrame (g, frame);
+
+    for (int i = 0; i < numChecks; ++i)
+    {
+        const auto box = juce::Rectangle<int> (checkBoxOrigins[i], checkBoxOrigins[i].translated (checkBoxSize, checkBoxSize));
+        const float opacity = isEnabled ((Check) i) ? 1.0f : disabledOpacity;
+
+        // The box and its caption are ink in the static artwork, already drawn
+        // at full strength. Since the page is transparent, they are faded by
+        // washing the background back over that region - which is the same
+        // thing the pixels would look like drawn at reduced opacity.
+        if (opacity < 1.0f)
         {
-            processor.inputProcessor.reset();
-            processor.isPlaybackOn.store (true);
-        };
-        addAndMakeVisible (previewButton);
+            const auto region = box.withRight (captionRight[i] + 4).expanded (4);
+            g.setOpacity (1.0f - opacity);
+            g.drawImage (assets.background.image,
+                         region.getX(), region.getY(), region.getWidth(), region.getHeight(),
+                         region.getX(), region.getY(), region.getWidth(), region.getHeight());
+            g.setOpacity (1.0f);
+        }
 
-        stopButton.onClick = [this] { processor.isPlaybackOn.store (false); };
-        addAndMakeVisible (stopButton);
-
-        replaceLabel.setText ("Replace with samples", juce::dontSendNotification);
-        replaceLabel.setFont (DrumifyTheme::mono (13.0f));
-        addAndMakeVisible (replaceLabel);
-
-        setupReplaceToggle (replaceKickToggle,  processor.replaceKick);
-        setupReplaceToggle (replaceSnareToggle, processor.replaceSnare);
-        setupReplaceToggle (replaceHatToggle,   processor.replaceHat);
-
-        setSize (300, 330);
+        if (checked[i])
+            assets.checkmark.drawScaledAbout (g, box.getCentre().toFloat(), 1.0f, opacity);
     }
 
-    /** Binds a checkbox to one of the processor's replace flags. Changing it
-        re-renders the loop straight away if there is one, so the effect is
-        heard without a trip to the update button.
-    */
-    void setupReplaceToggle (juce::ToggleButton& toggle, bool& flag)
+    for (int i = 0; i < numSlides; ++i)
     {
-        toggle.setToggleState (flag, juce::dontSendNotification);
-        toggle.setColour (juce::ToggleButton::textColourId, DrumifyTheme::ink);
-        toggle.setColour (juce::ToggleButton::tickColourId, DrumifyTheme::ink);
-        toggle.setColour (juce::ToggleButton::tickDisabledColourId, DrumifyTheme::ink.withAlpha (0.4f));
+        const float opacity = isEnabled ((Slide) i) ? 1.0f : disabledOpacity;
+        const int frameIndex = juce::jlimit (0, sliderFrames - 1, juce::roundToInt (value[i] * (sliderFrames - 1)));
 
-        toggle.onClick = [this, &toggle, &flag]
+        g.setOpacity (opacity);
+        g.drawImage (assets.sliderStrip.image,
+                     sliderOrigins[i].x, sliderOrigins[i].y, sliderWidth, sliderHeight,
+                     0, frameIndex * sliderHeight, sliderWidth, sliderHeight);
+        g.setOpacity (1.0f);
+
+        const auto text = readout ((Slide) i);
+
+        if (text.isNotEmpty())
         {
-            flag = toggle.getToggleState();
-
-            if (processor.inputProcessor.classifiedHits.empty())
-                return;
-
-            // The renderer swaps the buffer playAudio reads, so stop first.
-            processor.isPlaybackOn.store (false);
-            processor.buildDrumBuffer();
-        };
-
-        addAndMakeVisible (toggle);
+            g.setColour (DrumifyTheme::ink.withAlpha (opacity));
+            g.setFont (DrumifyTheme::mono (22.0f));
+            g.drawText (text, juce::Rectangle<int> (140, 30).withCentre (readoutCentres[i]),
+                        juce::Justification::centred);
+        }
     }
-
-    void paint (juce::Graphics& g) override
-    {
-        g.setColour (DrumifyTheme::ink);
-        g.setFont (DrumifyTheme::mono (18.0f, true));
-        g.drawText ("Settings", getLocalBounds().removeFromTop (30),
-                    juce::Justification::centredLeft);
-    }
-
-    void resized() override
-    {
-        auto area = getLocalBounds();
-        area.removeFromTop (36);
-
-        speedLabel.setBounds (area.removeFromTop (20));
-        speedSlider.setBounds (area.removeFromTop (28));
-        area.removeFromTop (14);
-
-        previewButton.setBounds (area.removeFromTop (44));
-        area.removeFromTop (4);
-        stopButton.setBounds (area.removeFromTop (44));
-
-        area.removeFromTop (14);
-        replaceLabel.setBounds (area.removeFromTop (20));
-        replaceKickToggle.setBounds  (area.removeFromTop (24));
-        replaceSnareToggle.setBounds (area.removeFromTop (24));
-        replaceHatToggle.setBounds   (area.removeFromTop (24));
-    }
-
-private:
-    HackBrownAudioProcessor& processor;
-
-    juce::Label      speedLabel;
-    juce::Slider     speedSlider;
-    juce::TextButton previewButton { "Preview Audio" };
-    juce::TextButton stopButton    { "Stop Playback" };
-
-    juce::Label        replaceLabel;
-    juce::ToggleButton replaceKickToggle  { "Kicks" };
-    juce::ToggleButton replaceSnareToggle { "Snares" };
-    juce::ToggleButton replaceHatToggle   { "Hats" };
-
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SettingsPanel)
-};
+}
 
 //==============================================================================
 HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProcessor& p)
@@ -1022,7 +1215,7 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
             stale.deleteFile();
 
     updateButton.onClick   = [this] { audioProcessor.reconstructLoopFromHits(); };
-    plusButton.onClick     = [this] { showSettingsPopup(); };
+    plusButton.onClick     = [this] { toggleSettingsPage(); };
     questionButton.onClick = [this] { toggleInfoPage(); };
 
     formatManager.registerBasicFormats();
@@ -1036,6 +1229,7 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
 
     // Added last so it draws over the controls as they pass each other.
     addAndMakeVisible (infoPage);
+    addAndMakeVisible (settingsPage);
     addAndMakeVisible (saveButtons);
 
     setSize (DrumifyLayout::canvasWidth, DrumifyLayout::canvasHeight);
@@ -1064,8 +1258,8 @@ void HackBrownAudioProcessorEditor::resized()
 {
     using namespace DrumifyLayout;
 
-    // Everything except the "?" rides this offset: at rest it is zero, and when
-    // the about page is open the controls have slid a full width to the right.
+    // Everything except the "?" and "+" rides this offset: zero at rest, a full
+    // width right with the about page open, a full width left with settings.
     // Off-window bounds also stop the hidden controls seeing the mouse.
     const auto shift = juce::roundToInt (slideProgress * (float) getWidth());
 
@@ -1079,9 +1273,13 @@ void HackBrownAudioProcessorEditor::resized()
                                                 micFrameSize, canvasHeight - micTop)
                             .translated (shift, 0));
 
-    // The about page trails a full width behind, so it arrives as the rest leaves.
-    infoPage.setBounds (juce::Rectangle<int> (infoPageX, infoPageY, infoPageW, infoPageH)
-                          .translated (shift - getWidth(), 0));
+    // The about page trails a full width behind, so it arrives as the rest
+    // leaves. Canvas-aligned artwork, so it is a whole page.
+    infoPage.setBounds (getLocalBounds().translated (shift - getWidth(), 0));
+
+    // The settings page waits a full width ahead and arrives from the right as
+    // the controls slide left. Canvas-aligned artwork, so it is a whole page.
+    settingsPage.setBounds (getLocalBounds().translated (shift + getWidth(), 0));
 
     // The three icons sit in a right-aligned row, each keeping its own aspect.
     const std::pair<AssetButton*, const AssetLayer*> icons[]
@@ -1110,8 +1308,9 @@ void HackBrownAudioProcessorEditor::resized()
 
     for (size_t i = 0; i < widths.size(); ++i)
     {
-        // The "?" stays put while the rest slides away - it is the way back.
-        const auto iconShift = (icons[i].first == &questionButton) ? 0 : shift;
+        // The "?" and "+" stay put while the rest slides away - each is the way
+        // back from the page it opens.
+        const auto iconShift = (icons[i].first == &questionButton || icons[i].first == &plusButton) ? 0 : shift;
 
         icons[i].first->setBounds (x - padding + iconShift, menuCentreY - menuIconHeight / 2 - padding,
                                    widths[i] + padding * 2, menuIconHeight + padding * 2);
@@ -1188,12 +1387,20 @@ void HackBrownAudioProcessorEditor::clearDragTarget()
 void HackBrownAudioProcessorEditor::toggleInfoPage()
 {
     infoPageVisible = ! infoPageVisible;
+    settingsPageVisible = false;   // the two pages leave in opposite directions, so never both
+    startTimerHz (60);
+}
+
+void HackBrownAudioProcessorEditor::toggleSettingsPage()
+{
+    settingsPageVisible = ! settingsPageVisible;
+    infoPageVisible = false;
     startTimerHz (60);
 }
 
 void HackBrownAudioProcessorEditor::timerCallback()
 {
-    const auto target = infoPageVisible ? 1.0f : 0.0f;
+    const auto target = infoPageVisible ? 1.0f : (settingsPageVisible ? -1.0f : 0.0f);
     const auto remaining = target - slideProgress;
 
     // Exponential ease-out: fast off the mark, gentle as it settles.
@@ -1211,11 +1418,6 @@ void HackBrownAudioProcessorEditor::timerCallback()
     repaint();
 }
 
-void HackBrownAudioProcessorEditor::showSettingsPopup()
-{
-    juce::CallOutBox::launchAsynchronously (std::make_unique<SettingsPanel> (audioProcessor),
-                                            plusButton.getBounds(), this);
-}
 
 // Dev tool. Absolute because a plugin binary has no reliable way back to the
 // repo. Matches the style of the CSV path InputProcessor's constructor opens.

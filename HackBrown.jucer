@@ -22,6 +22,10 @@
         <FILE id="IjcVWC" name="Hat.wav" compile="0" resource="1" file="DrumSamples/Hat.wav"/>
         <FILE id="u1utX3" name="Kick.wav" compile="0" resource="1" file="DrumSamples/Kick.wav"/>
         <FILE id="jezoTa" name="Snare.wav" compile="0" resource="1" file="DrumSamples/Snare.wav"/>
+        <FILE id="6u3BCu" name="About.png" compile="0" resource="1" file="DrumifyAssets/About.png"/>
+        <FILE id="EpUw6a" name="SettingsMenuStatic.png" compile="0" resource="1" file="DrumifyAssets/SettingsMenuStatic.png"/>
+        <FILE id="KabG5k" name="SliderStrip.png" compile="0" resource="1" file="DrumifyAssets/SliderStrip.png"/>
+        <FILE id="6ZAXM9" name="Checkmark.png" compile="0" resource="1" file="DrumifyAssets/Checkmark.png"/>
         <FILE id="DRkdjU" name="Speakers-StopPlayback.png" compile="0" resource="1" file="DrumifyAssets/Speakers-StopPlayback.png"/>
         <FILE id="8cxlWq" name="Save-MIDI.png" compile="0" resource="1" file="DrumifyAssets/Save-MIDI.png"/>
         <FILE id="NjnHRC" name="Save-Audio.png" compile="0" resource="1" file="DrumifyAssets/Save-Audio.png"/>
