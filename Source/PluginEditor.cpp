@@ -1103,9 +1103,13 @@ void SettingsPageComponent::applyToProcessor (bool rerender)
         processor.playbackSpeed = 1.0f;
 
     // Quantisation, converted from knob positions to real units here so the
-    // processor never has to know the sliders' ranges. The BPM is the selected
-    // one for now; the host and file sources have nothing to supply yet.
+    // processor never has to know the sliders' ranges. Which BPM the grid uses
+    // is resolved in the processor at render time, so a file loaded after the
+    // box was ticked still takes effect.
     processor.quantizeEnabled  = checked[quantize];
+    processor.bpmSource        = checked[lockHost] ? HackBrownAudioProcessor::BpmSource::host
+                               : checked[lockFile] ? HackBrownAudioProcessor::BpmSource::file
+                                                   : HackBrownAudioProcessor::BpmSource::selected;
     processor.quantizeBpm      = 10.0 + (double) value[bpm] * 210.0;
     processor.quantizeDivision = quantizeDivisions[juce::jlimit (0, numQuantizeSteps - 1,
                                                                 juce::roundToInt (value[quantizeAmount] * (numQuantizeSteps - 1)))];
@@ -1337,6 +1341,11 @@ void HackBrownAudioProcessorEditor::toggleRecording()
 
     if (! nowRecording && audioProcessor.recordingStarted.load())
         audioProcessor.reconstructLoopFromHits();
+
+    // A live take has no filename to carry a tempo, so the last file's no
+    // longer applies.
+    if (nowRecording)
+        audioProcessor.fileBpm = 0.0;
 
     audioProcessor.recordingEnabled.store (nowRecording);
     microphone.setRecording (nowRecording);

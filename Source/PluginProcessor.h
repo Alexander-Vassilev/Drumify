@@ -144,10 +144,34 @@ public:
     // Quantisation, as set from the settings page and read by getTimedHits().
     // Already in real units - the page converts from its knob positions - so
     // the timing code never sees a slider. Message thread only.
-    bool   quantizeEnabled  = false;
-    double quantizeBpm      = 120.0;
-    double quantizeDivision = 1.0 / 16.0;   // grid step as a fraction of a whole note
-    double swingAmount      = 0.0;          // 0 straight .. 1 full swing
+    enum class BpmSource { selected, host, file };
+
+    bool      quantizeEnabled  = false;
+    BpmSource bpmSource        = BpmSource::selected;
+    double    quantizeBpm      = 120.0;         // the "Select BPM" slider
+    double    quantizeDivision = 1.0 / 16.0;    // grid step as a fraction of a whole note
+    double    swingAmount      = 0.0;           // 0 straight .. 1 full swing
+
+    /** The tempo read from the uploaded loop's filename, or 0 if it had none.
+        Set by processUploadedLoop; a live take clears it.
+    */
+    double fileBpm = 0.0;
+
+    /** The tempo the grid actually uses, resolved from bpmSource. A source
+        with nothing to offer - a file with no tempo in its name, or the host
+        outside a DAW - falls back to the selected BPM.
+    */
+    double effectiveQuantizeBpm() const;
+
+    /** Reads a tempo out of a filename: a run of two or three digits, bounded
+        by non-digits, in the range the grid accepts. If several qualify, the
+        one written before "bpm" (any case, with or without a separator) wins;
+        otherwise the first. Returns 0 when there is none.
+    */
+    static double bpmFromFileName (const juce::String& fileName);
+
+    // Quantised hits closer together than this are merged into the earlier one.
+    static constexpr double minHitSpacingSeconds = 0.05;
 
     static constexpr double unreplacedHitFadeInSeconds = 0.000;
     static constexpr double unreplacedHitFadeOutSeconds = 0.005;

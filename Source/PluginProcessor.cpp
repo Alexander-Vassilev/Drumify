@@ -242,10 +242,69 @@ void HackBrownAudioProcessor::analyzeLoadedDrumLoop (const juce::AudioBuffer<flo
     DBG ("Drum loop analysis finished!");
 }
 
+double HackBrownAudioProcessor::bpmFromFileName (const juce::String& fileName)
+{
+    constexpr double minBpm = 10.0, maxBpm = 220.0;   // the Select BPM slider's range
+
+    const auto text = fileName.toLowerCase();
+    const auto length = text.length();
+
+    double first = 0.0;
+
+    for (int i = 0; i < length; ++i)
+    {
+        if (! juce::CharacterFunctions::isDigit (text[i]))
+            continue;
+
+        int end = i;
+        while (end < length && juce::CharacterFunctions::isDigit (text[end]))
+            ++end;
+
+        const int digits = end - i;
+
+        if (digits == 2 || digits == 3)
+        {
+            const double value = text.substring (i, end).getDoubleValue();
+
+            if (value >= minBpm && value <= maxBpm)
+            {
+                // Skip any separator ("128 bpm", "128_bpm", "128-bpm") before
+                // looking for the tag itself.
+                int tag = end;
+                while (tag < length && ! juce::CharacterFunctions::isLetterOrDigit (text[tag]))
+                    ++tag;
+
+                if (text.substring (tag, tag + 3) == "bpm")
+                    return value;
+
+                if (first == 0.0)
+                    first = value;
+            }
+        }
+
+        i = end;   // the loop's ++i steps past the non-digit that ended the run
+    }
+
+    return first;
+}
+
+double HackBrownAudioProcessor::effectiveQuantizeBpm() const
+{
+    switch (bpmSource)
+    {
+        case BpmSource::file:     return fileBpm > 0.0 ? fileBpm : quantizeBpm;
+        case BpmSource::host:     return quantizeBpm;   // no host tempo is read yet
+        case BpmSource::selected: break;
+    }
+
+    return quantizeBpm;
+}
+
 void HackBrownAudioProcessor::processUploadedLoop(const juce::File& file)
 {
     auto reader = createReaderForFile (file);
     inputProcessor.currFileName = file.getFileName();
+    fileBpm = bpmFromFileName (file.getFileNameWithoutExtension());
     
     if (reader == nullptr)
     {
@@ -843,13 +902,11 @@ std::vector<ClassifiedHit> HackBrownAudioProcessor::getTimedHits() const
 
     if (quantizeEnabled) {
         DBG("Quantising!");
-        int quantizeUnitInSamples = (60.0f / quantizeBpm) * quantizeDivision * 4 * currentSampleRate;
+        int quantizeUnitInSamples = (60.0f / effectiveQuantizeBpm()) * quantizeDivision * 4 * currentSampleRate;
         int maxSwingUnit = (static_cast<int>(((1.0f / 16.0f) / quantizeDivision)) * quantizeUnitInSamples) >> 1;
         maxSwingUnit *= 0.8;
-        int numRemovedHits = 0;
         
         for (auto& hit : timed) {
-            hit.hitIndex -= numRemovedHits;
             int relativeStartSample = hit.onsetSample - startSample;
             int unitIndex = std::floor(static_cast<float>(relativeStartSample) / static_cast<float>(quantizeUnitInSamples));
             int startingSample = unitIndex * quantizeUnitInSamples;
@@ -865,12 +922,29 @@ std::vector<ClassifiedHit> HackBrownAudioProcessor::getTimedHits() const
             if (std::abs(relativeStartSample - startingSample) > std::abs(relativeStartSample - endingSample)) startingSample = endingSample;
             hit.onsetSample = startingSample + startSample;
         }
+
+        // Hits that land within minHitSpacingSeconds of each other collapse
+        // into the earliest of them: the input is one voice, so two that close
+        // are either one hit the detector split or two the grid folded onto
+        // the same slot. Each hit is measured against the last one kept, not
+        // the last one seen, so a cluster thins to a spaced set rather than
+        // disappearing altogether. The sort is stable so that hits the grid
+        // made simultaneous keep their detection order, and the earlier wins.
+        // hitIndex still points into storedHits, which is not compacted, so
+        // the surviving hits keep theirs as they are.
+        std::stable_sort (timed.begin(), timed.end(),
+                          [] (const ClassifiedHit& a, const ClassifiedHit& b) { return a.onsetSample < b.onsetSample; });
+
+        const int minSpacing = juce::roundToInt (minHitSpacingSeconds * currentSampleRate);
+        std::vector<ClassifiedHit> kept;
+        kept.reserve (timed.size());
+
+        for (const auto& hit : timed)
+            if (kept.empty() || hit.onsetSample - kept.back().onsetSample >= minSpacing)
+                kept.push_back (hit);
+
+        timed = std::move (kept);
     }
-    
-    // Quantisation goes here: move each hit's onsetSample onto the grid. Work
-    // in seconds relative to the first hit (the loop's origin), and round back
-    // to a sample index once at the end. Stretching is applied downstream by
-    // the renderer and the MIDI writer, so snap in the original tempo.
 
     return timed;
 }
