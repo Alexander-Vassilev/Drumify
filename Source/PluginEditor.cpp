@@ -885,14 +885,27 @@ namespace
     constexpr int sliderWidth = 315, sliderHeight = 31;
     constexpr float knobTravelStart = 17.0f, knobTravelEnd = 299.0f;
 
+    // The last three are the class bias rows, which are not in the artwork:
+    // they sit under the sensitivity slider, right-aligned to its edge, with
+    // their captions drawn in the theme font and a multiplier readout to the
+    // right. Their slider is the same strip at biasSliderScale.
     const juce::Point<int> sliderOrigins[] {
-        { 33, 475 }, { 450, 263 }, { 450, 496 }, { 450, 623 }, { 867, 265 }
+        { 33, 475 }, { 450, 263 }, { 450, 496 }, { 450, 623 }, { 867, 265 },
+        { 121, 552 }, { 121, 590 }, { 121, 628 }
     };
 
-    // Where the "xx" placeholders sit under the three sliders that have one.
+    constexpr float biasSliderScale = 0.72f;   // 315x31 -> 227x22
+
+    // Where the "xx" placeholders sit under the three sliders that have one,
+    // and where the bias multipliers go beside their rows.
     const juce::Point<int> readoutCentres[] {
-        { 0, 0 }, { 595, 313 }, { 595, 545 }, { 0, 0 }, { 1016, 313 }
+        { 0, 0 }, { 595, 313 }, { 595, 545 }, { 0, 0 }, { 1016, 313 },
+        { 396, 563 }, { 396, 601 }, { 396, 639 }
     };
+
+    const juce::Rectangle<int> biasHeading { 33, 512, 300, 34 };
+    const char* const biasCaptions[] { "Kick", "Snare", "Hat" };
+    constexpr int biasCaptionX = 33;
 
     // Right edge of each box's caption in the static artwork, for the checks
     // that can be disabled. The caption fades with its box.
@@ -903,6 +916,10 @@ namespace
     constexpr int numQuantizeSteps = 7;
 
     constexpr float disabledOpacity = 0.3f;
+
+    // A bias knob runs 0.25x to 4x on a log scale, so 1x - no bias - sits at
+    // the centre of the travel.
+    double biasWeight (float v) { return std::pow (4.0, 2.0 * (double) v - 1.0); }
 }
 
 SettingsPageComponent::SettingsPageComponent (const DrumifyAssets& a, HackBrownAudioProcessor& p)
@@ -924,6 +941,19 @@ SettingsPageComponent::SettingsPageComponent (const DrumifyAssets& a, HackBrownA
     value[bpm]            = (120.0f - 10.0f) / 210.0f;        // 120 BPM
     value[swingAmount]    = 0.0f;
     value[stretch]        = 0.5f;                             // 1x on the log scale
+    value[biasKick] = value[biasSnare] = value[biasHat] = 0.5f;   // 1x: no bias
+}
+
+float SettingsPageComponent::sliderScale (Slide sl) const
+{
+    return sl >= biasKick ? biasSliderScale : 1.0f;
+}
+
+juce::Rectangle<int> SettingsPageComponent::sliderBounds (Slide sl) const
+{
+    const float scale = sliderScale (sl);
+    return { sliderOrigins[sl].x, sliderOrigins[sl].y,
+             juce::roundToInt (sliderWidth * scale), juce::roundToInt (sliderHeight * scale) };
 }
 
 bool SettingsPageComponent::isEnabled (Check c) const
@@ -963,8 +993,7 @@ int SettingsPageComponent::checkAt (juce::Point<int> p) const
 int SettingsPageComponent::slideAt (juce::Point<int> p) const
 {
     for (int i = 0; i < numSlides; ++i)
-        if (juce::Rectangle<int> (sliderOrigins[i], sliderOrigins[i].translated (sliderWidth, sliderHeight))
-              .expanded (0, 6).contains (p))
+        if (sliderBounds ((Slide) i).expanded (0, 6).contains (p))
             return i;
 
     return -1;
@@ -1002,13 +1031,14 @@ void SettingsPageComponent::toggle (Check c)
         checked[c] = ! checked[c];
     }
 
-    applyToProcessor (true);
+    applyToProcessor (Rerender::timing);
     repaint();
 }
 
 float SettingsPageComponent::valueForX (Slide sl, int x) const
 {
-    const float local = (float) (x - sliderOrigins[sl].x);
+    const float scale = sliderScale (sl);
+    const float local = (float) (x - sliderOrigins[sl].x) / scale;
     float v = juce::jlimit (0.0f, 1.0f, (local - knobTravelStart) / (knobTravelEnd - knobTravelStart));
 
     // The quantize slider is stepped: snap to the nearest of its seven values.
@@ -1056,12 +1086,14 @@ void SettingsPageComponent::mouseUp (const juce::MouseEvent&)
         return;
 
     // A slider only reaches the processor when the drag ends: re-rendering the
-    // loop on every mouse-move would be far too heavy.
-    const bool affectsProcessor = (dragging != sensitivity);
+    // loop on every mouse-move would be far too heavy. What has to run again
+    // depends on where in the pipeline the slider acts.
+    const auto level = dragging == sensitivity ? Rerender::detection
+                     : dragging >= biasKick    ? Rerender::classes
+                                               : Rerender::timing;
     dragging = -1;
 
-    if (affectsProcessor)
-        applyToProcessor (true);
+    applyToProcessor (level);
 }
 
 juce::String SettingsPageComponent::readout (Slide sl) const
@@ -1083,12 +1115,15 @@ juce::String SettingsPageComponent::readout (Slide sl) const
             // 0.1x to 10x on a log scale, so 1x sits at the centre of the travel.
             return juce::String (0.1 * std::pow (100.0, (double) v), 2) + "x";
 
+        case biasKick: case biasSnare: case biasHat:
+            return juce::String (biasWeight (v), 2) + "x";
+
         default:
             return {};
     }
 }
 
-void SettingsPageComponent::applyToProcessor (bool rerender)
+void SettingsPageComponent::applyToProcessor (Rerender level)
 {
     processor.replaceKick  = checked[kicks];
     processor.replaceSnare = checked[snares];
@@ -1115,10 +1150,35 @@ void SettingsPageComponent::applyToProcessor (bool rerender)
                                                                 juce::roundToInt (value[quantizeAmount] * (numQuantizeSteps - 1)))];
     processor.swingAmount      = checked[swing] ? (double) value[swingAmount] : 0.0;
 
-    if (rerender && ! processor.inputProcessor.classifiedHits.empty())
+    // Analysis: the sensitivity is picked up by the detector at the start of
+    // the next take, or right now by a re-analysis; the bias by the next
+    // classification.
+    processor.sensitivity.store (value[sensitivity]);
+    processor.inputProcessor.classBias = { biasWeight (value[biasKick]),
+                                           biasWeight (value[biasSnare]),
+                                           biasWeight (value[biasHat]) };
+
+    switch (level)
     {
-        processor.isPlaybackOn.store (false);   // the render swaps the buffer playAudio reads
-        processor.buildDrumBuffer();
+        case Rerender::none:
+            break;
+
+        case Rerender::detection:
+            processor.reanalyseCapturedInput();   // bows out with nothing captured
+            break;
+
+        case Rerender::classes:
+            if (! processor.inputProcessor.classifiedHits.empty())
+                processor.reconstructLoopFromHits();   // classifies the stored hits again
+            break;
+
+        case Rerender::timing:
+            if (! processor.inputProcessor.classifiedHits.empty())
+            {
+                processor.isPlaybackOn.store (false);   // the render swaps the buffer playAudio reads
+                processor.buildDrumBuffer();
+            }
+            break;
     }
 }
 
@@ -1151,24 +1211,42 @@ void SettingsPageComponent::paint (juce::Graphics& g)
             assets.checkmark.drawScaledAbout (g, box.getCentre().toFloat(), 1.0f, opacity);
     }
 
+    // The bias rows have no artwork, so their captions are set in the theme
+    // font at the size of the captions around them.
+    g.setColour (DrumifyTheme::ink);
+    g.setFont (DrumifyTheme::mono (30.0f));
+    g.drawText ("Prefer:", biasHeading, juce::Justification::centredLeft);
+
     for (int i = 0; i < numSlides; ++i)
     {
-        const float opacity = isEnabled ((Slide) i) ? 1.0f : disabledOpacity;
+        const auto sl = (Slide) i;
+        const auto bounds = sliderBounds (sl);
+        const bool isBias = sl >= biasKick;
+        const float opacity = isEnabled (sl) ? 1.0f : disabledOpacity;
         const int frameIndex = juce::jlimit (0, sliderFrames - 1, juce::roundToInt (value[i] * (sliderFrames - 1)));
 
         g.setOpacity (opacity);
         g.drawImage (assets.sliderStrip.image,
-                     sliderOrigins[i].x, sliderOrigins[i].y, sliderWidth, sliderHeight,
+                     bounds.getX(), bounds.getY(), bounds.getWidth(), bounds.getHeight(),
                      0, frameIndex * sliderHeight, sliderWidth, sliderHeight);
         g.setOpacity (1.0f);
 
-        const auto text = readout ((Slide) i);
+        if (isBias)
+        {
+            g.setColour (DrumifyTheme::ink);
+            g.setFont (DrumifyTheme::mono (26.0f));
+            g.drawText (biasCaptions[sl - biasKick],
+                        juce::Rectangle<int> (biasCaptionX, bounds.getY() - 6, bounds.getX() - biasCaptionX, bounds.getHeight() + 12),
+                        juce::Justification::centredLeft);
+        }
+
+        const auto text = readout (sl);
 
         if (text.isNotEmpty())
         {
             g.setColour (DrumifyTheme::ink.withAlpha (opacity));
-            g.setFont (DrumifyTheme::mono (22.0f));
-            g.drawText (text, juce::Rectangle<int> (140, 30).withCentre (readoutCentres[i]),
+            g.setFont (DrumifyTheme::mono (isBias ? 18.0f : 22.0f));
+            g.drawText (text, juce::Rectangle<int> (isBias ? 84 : 140, 30).withCentre (readoutCentres[i]),
                         juce::Justification::centred);
         }
     }

@@ -344,7 +344,7 @@ void InputProcessor::classifyStoredHits(double sampleRate)
         classified.onsetSample = hit.onsetSample;
         if (csvFile.is_open()) csvFile << currFileName;
         DBG("zcr: " << features.transientZcr);
-        classified.type = HitClassifier::classify(features, csvFile);
+        classified.type = HitClassifier::classify(features, csvFile, classBias);
         classified.rms = features.rms;
         classified.zcr = features.zcr;
         classified.durationSec = features.durationSec;

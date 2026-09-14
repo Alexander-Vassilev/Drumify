@@ -173,10 +173,30 @@ public:
     // Quantised hits closer together than this are merged into the earlier one.
     static constexpr double minHitSpacingSeconds = 0.05;
 
+    /** Onset sensitivity from the settings page, 0 (fewest onsets) to 1 (most).
+        Atomic because reset() applies it to the detector on the audio thread
+        at the start of a take; 0.5 is the detector's tuned absolute threshold.
+    */
+    std::atomic<float> sensitivity { 0.5f };
+
+    /** Runs onset detection and classification again over the captured input
+        - the last take or upload - so a new sensitivity applies to it without
+        recording again. Does nothing during a take or with nothing captured.
+    */
+    void reanalyseCapturedInput();
+
     static constexpr double unreplacedHitFadeInSeconds = 0.000;
     static constexpr double unreplacedHitFadeOutSeconds = 0.005;
 private:
     void reset();
+
+    /** Sets the onset detector's absolute threshold from `sensitivity`. */
+    void applySensitivity();
+
+    /** Feeds `numSamples` of mono audio through onset detection and hit
+        extraction in block-sized chunks, then flushes the last hit.
+    */
+    void runDetection (const float* data, int numSamples);
     void analyzeLoadedDrumLoop (const juce::AudioBuffer<float>& loopBuffer);
     void classifyAudioBlock (int channel, const float* inputData, int numSamples);
     void recordAudio(juce::AudioBuffer<float>& buffer);
@@ -237,6 +257,11 @@ private:
     ComplexOdf complexOnsetDetector { fftOrder, currentSampleRate }; // Order 10 = size 1024
     static constexpr float statisticalRatioThreshold = 1.5f; // Adjust this threshold to taste
     static constexpr float statisticalAbsoluteThreshold = 3000.0f; // Adjust this threshold to taste
+    // The sensitivity slider's range for the absolute threshold: its far left
+    // raises it to the max, its far right lowers it to the min, and its centre
+    // is the tuned value above.
+    static constexpr float statisticalAbsoluteThresholdMin = 500.0f;
+    static constexpr float statisticalAbsoluteThresholdMax = 100000.0f;
     static constexpr int baseMeanLength = 1; // Adjust this threshold to taste
     static constexpr int mediumHistoryMeanLength = 6; // Adjust this threshold to taste
     static constexpr int longHistoryMeanLength = 20; // Adjust this threshold to taste

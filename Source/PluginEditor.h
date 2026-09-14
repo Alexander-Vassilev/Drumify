@@ -378,7 +378,13 @@ public:
 private:
     enum Check { kicks, snares, hats, quantize, lockHost, lockFile, selectBpm, swing,
                  stretchOutput, musicalStretch, numChecks };
-    enum Slide { sensitivity, quantizeAmount, bpm, swingAmount, stretch, numSlides };
+    enum Slide { sensitivity, quantizeAmount, bpm, swingAmount, stretch,
+                 biasKick, biasSnare, biasHat, numSlides };
+
+    /** How much of the pipeline a change has to run again, from the cheapest
+        (place the events again) to the dearest (detect the onsets again).
+    */
+    enum class Rerender { none, timing, classes, detection };
 
     /** Whether a control can currently be used, per the page's enabling rules. */
     bool isEnabled (Check) const;
@@ -393,8 +399,16 @@ private:
 
     juce::String readout (Slide) const;
 
-    /** Pushes the toggles and stretch factor into the processor. */
-    void applyToProcessor (bool rerender);
+    /** The slider's rectangle in canvas coordinates; the bias sliders are
+        drawn smaller than the artwork's own.
+    */
+    juce::Rectangle<int> sliderBounds (Slide) const;
+    float sliderScale (Slide) const;
+
+    /** Pushes the page's state into the processor, then re-runs as much of
+        the pipeline as `level` asks for.
+    */
+    void applyToProcessor (Rerender level);
 
     const DrumifyAssets& assets;
     HackBrownAudioProcessor& processor;

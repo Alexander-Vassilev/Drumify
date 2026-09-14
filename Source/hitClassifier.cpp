@@ -488,7 +488,7 @@ double HitClassifier::calculateClassLikelihood(const PooledHitFeatures& f, const
 // - Hat: high ZCR + short duration
 // - Kick: low ZCR + longer duration + decent RMS
 // - Snare: mid ZCR band
-HitType HitClassifier::classify(const HitFeatures& f, std::ofstream& csvFile)
+HitType HitClassifier::classify(const HitFeatures& f, std::ofstream& csvFile, const ClassBias& bias)
 {
     DBG("fftActive: " << static_cast<int>(f.fftActive));
     if (f.fftActive) {
@@ -679,9 +679,9 @@ HitType HitClassifier::classify(const HitFeatures& f, std::ofstream& csvFile)
         DBG("Kick Probabilities:");
         DBG("Snare Probabilities:");
         
-        double hatLikelihood   = calculateClassLikelihood(pooledFeatures, hatParams);
-        double kickLikelihood  = calculateClassLikelihood(pooledFeatures, kickParams);
-        double snareLikelihood = calculateClassLikelihood(pooledFeatures, snareParams);
+        double hatLikelihood   = calculateClassLikelihood(pooledFeatures, hatParams)   * bias.hat;
+        double kickLikelihood  = calculateClassLikelihood(pooledFeatures, kickParams)  * bias.kick;
+        double snareLikelihood = calculateClassLikelihood(pooledFeatures, snareParams) * bias.snare;
 
         double totalLikelihood = hatLikelihood + kickLikelihood + snareLikelihood;
 

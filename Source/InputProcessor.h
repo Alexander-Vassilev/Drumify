@@ -400,6 +400,12 @@ public:
         ratioThreshold = newThreshold;
     }
 
+    void setThresholds(float newRatioThreshold, float newAbsoluteThreshold)
+    {
+        ratioThreshold = newRatioThreshold;
+        absoluteThreshold = newAbsoluteThreshold;
+    }
+
     // Pass the current sample amplitude. Returns 'true' on the exact sample the hit is confirmed.
     bool processSample(float amp, int sampleCount)
     {
@@ -451,6 +457,7 @@ public:
             bool longTermTrigger = (mediumMeanRatio > 1.1 && longMeanRatio > 1.4) && (varianceTwoSamplesAgo < 25000);
             
             // If the current average spikes significantly above the running history mean
+            DBG("abs threshold: " << absoluteThreshold);
             if ((mediumMeanRatio > ratioThreshold || longTermTrigger) && (currentSMA > absoluteThreshold))
             {
                 isTentative = true;
@@ -598,6 +605,10 @@ public:
     // Results live here:
     std::vector<ClassifiedHit> classifiedHits;
     std::ofstream csvFile;
+
+    // Per-class prior weights from the settings page, applied by
+    // classifyStoredHits. Message thread only.
+    ClassBias classBias;
 private:
     /*
     static constexpr int numHits = 64;

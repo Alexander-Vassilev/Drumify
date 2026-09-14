@@ -313,12 +313,22 @@ public:
     }
 };
 
+/** A prior weight per class, multiplied into the likelihoods before the
+    decision. 1.0 everywhere is the plain classifier; raising one drum's
+    weight moves the boundary towards it for a voice the training data did
+    not cover.
+*/
+struct ClassBias
+{
+    double kick = 1.0, snare = 1.0, hat = 1.0;
+};
+
 class HitClassifier
 {
 public:
     HitFeatures extractFeatures(const juce::AudioBuffer<float>& buffer, int length, double sampleRate);
     static std::vector<std::vector<juce::dsp::Complex<float>>> getSTFT(const juce::AudioBuffer<float>& buffer, int length);
-    static HitType classify(const HitFeatures& f, std::ofstream& csvFile);
+    static HitType classify(const HitFeatures& f, std::ofstream& csvFile, const ClassBias& bias = {});
     static const char* toString(HitType t);
     
     FFTProcessor fft;

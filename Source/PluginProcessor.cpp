@@ -106,6 +106,54 @@ void HackBrownAudioProcessor::reset()
     envelopeFollower.reset();
     inputProcessor.reset();
     statisticalDetector.reset();
+    applySensitivity();
+}
+
+void HackBrownAudioProcessor::applySensitivity()
+{
+    // The slider moves the absolute threshold only - the level the ODF has
+    // to reach before a spike counts at all. Its centre is the tuned value,
+    // and each half of the travel runs geometrically from there to its end:
+    // far left 100000 (almost nothing triggers), far right 500 (almost
+    // anything does). The ratio gate stays as tuned.
+    const float s = juce::jlimit (0.0f, 1.0f, sensitivity.load());
+
+    const float absolute = s <= 0.5f
+        ? statisticalAbsoluteThreshold * std::pow (statisticalAbsoluteThresholdMax / statisticalAbsoluteThreshold, 1.0f - 2.0f * s)
+        : statisticalAbsoluteThreshold * std::pow (statisticalAbsoluteThresholdMin / statisticalAbsoluteThreshold, 2.0f * s - 1.0f);
+
+    statisticalDetector.setThresholds (statisticalRatioThreshold, absolute);
+}
+
+void HackBrownAudioProcessor::runDetection (const float* data, int numSamples)
+{
+    const int chunkSize = getBlockSize();
+
+    for (int startSample = 0; startSample < numSamples; startSample += chunkSize)
+    {
+        const int samplesToProcess = std::min (chunkSize, numSamples - startSample);
+        classifyAudioBlock (0, data + startSample, samplesToProcess);
+    }
+
+    inputProcessor.flush();
+}
+
+void HackBrownAudioProcessor::reanalyseCapturedInput()
+{
+    // The audio thread owns the detector during a take; the take's own reset
+    // will pick the new sensitivity up when it starts.
+    if (recordingEnabled.load())
+        return;
+
+    const int length = juce::jmin (capturedInputLength.load(), capturedInput.getNumSamples());
+
+    if (length <= 0 || capturedInput.getNumChannels() == 0)
+        return;
+
+    isPlaybackOn.store (false);
+    reset();
+    runDetection (capturedInput.getReadPointer (0), length);
+    reconstructLoopFromHits();
 }
 
 void HackBrownAudioProcessor::getLongestSampleLengthInSamples()
@@ -200,7 +248,6 @@ void HackBrownAudioProcessor::analyzeLoadedDrumLoop (const juce::AudioBuffer<flo
     reset();
     
     const int totalSamples = loopBuffer.getNumSamples();
-    const int chunkSize = getBlockSize();
 
     // Sum to mono rather than analysing channel 0 alone: anything panned hard to
     // one side - a hat or ride off to one edge - would otherwise be missed
@@ -230,14 +277,7 @@ void HackBrownAudioProcessor::analyzeLoadedDrumLoop (const juce::AudioBuffer<flo
         capturedInputLength.store (toKeep);
     }
 
-    for (int startSample = 0; startSample < totalSamples; startSample += chunkSize)
-    {
-        int samplesToProcess = std::min (chunkSize, totalSamples - startSample);
-        const float* chunkPtr = totalInputData + startSample;
-        classifyAudioBlock (0, chunkPtr, samplesToProcess);
-    }
-    
-    inputProcessor.flush();
+    runDetection (totalInputData, totalSamples);
     reconstructLoopFromHits();
     DBG ("Drum loop analysis finished!");
 }
@@ -922,31 +962,29 @@ std::vector<ClassifiedHit> HackBrownAudioProcessor::getTimedHits() const
             if (std::abs(relativeStartSample - startingSample) > std::abs(relativeStartSample - endingSample)) startingSample = endingSample;
             hit.onsetSample = startingSample + startSample;
         }
-
-        // Hits that land within minHitSpacingSeconds of each other collapse
-        // into the earliest of them: the input is one voice, so two that close
-        // are either one hit the detector split or two the grid folded onto
-        // the same slot. Each hit is measured against the last one kept, not
-        // the last one seen, so a cluster thins to a spaced set rather than
-        // disappearing altogether. The sort is stable so that hits the grid
-        // made simultaneous keep their detection order, and the earlier wins.
-        // hitIndex still points into storedHits, which is not compacted, so
-        // the surviving hits keep theirs as they are.
-        std::stable_sort (timed.begin(), timed.end(),
-                          [] (const ClassifiedHit& a, const ClassifiedHit& b) { return a.onsetSample < b.onsetSample; });
-
-        const int minSpacing = juce::roundToInt (minHitSpacingSeconds * currentSampleRate);
-        std::vector<ClassifiedHit> kept;
-        kept.reserve (timed.size());
-
-        for (const auto& hit : timed)
-            if (kept.empty() || hit.onsetSample - kept.back().onsetSample >= minSpacing)
-                kept.push_back (hit);
-
-        timed = std::move (kept);
     }
 
-    return timed;
+    // Hits within minHitSpacingSeconds of each other collapse into the earliest
+    // of them, quantised or not: the input is one voice, so two that close are
+    // either one hit the detector split or, on the grid, two folded onto the
+    // same slot. Each hit is measured against the last one kept, not the last
+    // one seen, so a cluster thins to a spaced set rather than disappearing
+    // altogether. The sort is stable so that hits the grid made simultaneous
+    // keep their detection order, and the earlier wins. hitIndex still points
+    // into storedHits, which is not compacted, so the surviving hits keep
+    // theirs as they are.
+    std::stable_sort (timed.begin(), timed.end(),
+                      [] (const ClassifiedHit& a, const ClassifiedHit& b) { return a.onsetSample < b.onsetSample; });
+
+    const int minSpacing = juce::roundToInt (minHitSpacingSeconds * currentSampleRate);
+    std::vector<ClassifiedHit> kept;
+    kept.reserve (timed.size());
+
+    for (const auto& hit : timed)
+        if (kept.empty() || hit.onsetSample - kept.back().onsetSample >= minSpacing)
+            kept.push_back (hit);
+
+    return kept;
 }
 
 void HackBrownAudioProcessor::buildDrumBuffer() {
