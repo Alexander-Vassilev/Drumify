@@ -844,7 +844,8 @@ std::vector<ClassifiedHit> HackBrownAudioProcessor::getTimedHits() const
     if (quantizeEnabled) {
         DBG("Quantising!");
         int quantizeUnitInSamples = (60.0f / quantizeBpm) * quantizeDivision * 4 * currentSampleRate;
-        int halfQuantizeUnit = quantizeUnitInSamples >> 1;
+        int maxSwingUnit = (static_cast<int>(((1.0f / 16.0f) / quantizeDivision)) * quantizeUnitInSamples) >> 1;
+        maxSwingUnit *= 0.8;
         int numRemovedHits = 0;
         
         for (auto& hit : timed) {
@@ -852,7 +853,16 @@ std::vector<ClassifiedHit> HackBrownAudioProcessor::getTimedHits() const
             int relativeStartSample = hit.onsetSample - startSample;
             int unitIndex = std::floor(static_cast<float>(relativeStartSample) / static_cast<float>(quantizeUnitInSamples));
             int startingSample = unitIndex * quantizeUnitInSamples;
-            if (relativeStartSample - startingSample > halfQuantizeUnit) startingSample += quantizeUnitInSamples;
+            int endingSample = startingSample + quantizeUnitInSamples;
+            
+            if (swingAmount > 0) {
+                int numSamplesSwing = maxSwingUnit * swingAmount;
+                
+                if (unitIndex & 1) startingSample += numSamplesSwing;
+                else endingSample += numSamplesSwing;
+            }
+            
+            if (std::abs(relativeStartSample - startingSample) > std::abs(relativeStartSample - endingSample)) startingSample = endingSample;
             hit.onsetSample = startingSample + startSample;
         }
     }
