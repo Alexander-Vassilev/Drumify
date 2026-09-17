@@ -2,6 +2,8 @@
 
 <img width="1194" height="696" alt="DrumifyUI" src="https://github.com/user-attachments/assets/cd1063b0-4a82-4fbe-9464-78e727062185" />
 
+
+
 Have you ever wanted to translate musical ideas straight from your head into the world? Do you wish there were an intuitive, highly interpretable, and customizable way to do so? 
 
 Welcome to **Drumify**—a plugin designed to transform vocal beatboxing into drum loops using your own customizable samples, as well as enable real-time drum replacement on existing audio tracks. 
