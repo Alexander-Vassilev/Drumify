@@ -60,8 +60,24 @@ namespace DrumifyLayout
     constexpr int micTop = 215;   // top of the component, i.e. above the label
 
     // The about page is canvas-aligned artwork - its heading sits in the title
-    // slot - with the scrolling copy in a column over the centre, below it.
-    constexpr int aboutBodyX = 250, aboutBodyY = 142, aboutBodyW = 700, aboutBodyH = 498;
+    // slot - with the copy in a column down the parchment, inside its torn
+    // edges. The column runs to the very bottom of the canvas: the text is
+    // dragged by hand, and should leave by the edge rather than stop short of
+    // it.
+    constexpr int aboutBodyX = 365, aboutBodyY = 190, aboutBodyW = 500;
+    constexpr float aboutBodyFontHeight = 20.0f, aboutBodyLineGap = 5.0f;
+
+    // How deep the band is in which the copy dissolves as it leaves the top.
+    constexpr int aboutFadeHeight = 70;
+
+    // Empty sheet past the last line, so the end of the copy can be pulled up
+    // clear of the bottom edge instead of resting against it.
+    constexpr int aboutBodyTailSpace = 40;
+
+    // The copy sits a little off the parchment rather than flat on it.
+    constexpr int   aboutShadowRadius = 3;
+    constexpr float aboutShadowAlpha  = 0.35f;
+    constexpr int   aboutShadowRoom   = 10;   // spare rows so the last line's shadow is not clipped
 
     // The speaker and save layers are canvas-aligned too; only their captions
     // need placing.
@@ -131,8 +147,9 @@ struct DrumifyAssets
     // ticked box, and the slider as a vertical strip of every knob position.
     AssetLayer settingsMenu, checkmark, sliderStrip;
 
-    // The about page's heading, in the title slot.
-    AssetLayer about;
+    // The about page: its heading in the title slot, and the sheet the copy
+    // is written on.
+    AssetLayer about, parchment;
 
     // The top-row icon that returns to the main page from either page.
     AssetLayer home;
@@ -352,8 +369,10 @@ private:
 };
 
 //==============================================================================
-/** The about page that slides in when the "?" is clicked: the heading artwork
-    with the scrollable copy beneath it.
+/** The about page that slides in when the "?" is clicked: the heading artwork,
+    a sheet of parchment, and the copy written down it. There is no scrollbar -
+    the sheet is dragged by hand - and the copy dissolves into the page as it
+    leaves the top rather than being cut off at a hard edge.
 */
 class InfoPageComponent : public juce::Component
 {
@@ -361,12 +380,31 @@ public:
     explicit InfoPageComponent (const DrumifyAssets&);
 
     void paint (juce::Graphics&) override;
-    void resized() override;
     bool hitTest (int x, int y) override;
 
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
+
 private:
+    /** The column the copy is laid out in, down to the bottom of the canvas. */
+    juce::Rectangle<int> bodyArea() const;
+
+    void setScroll (float newOffset);
+
+    /** Renders the whole of the copy, with its shadow, into pageImage. */
+    void buildPageImage();
+
+    /** The top band of the column, with the copy fading out as it leaves. */
+    void drawFadingTop (juce::Graphics&, juce::Rectangle<int> area);
+
     const DrumifyAssets& assets;
-    juce::TextEditor body;
+
+    juce::TextLayout layout;        // the copy, laid out to the column width
+    juce::Image pageImage;          // that copy drawn once, shadow and all
+    juce::Image fadeBand;           // scratch for the dissolving band
+    float scrollOffset = 0.0f;
+    float dragStartOffset = 0.0f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (InfoPageComponent)
 };

@@ -22,6 +22,7 @@
         <FILE id="IjcVWC" name="Hat.wav" compile="0" resource="1" file="DrumSamples/Hat.wav"/>
         <FILE id="u1utX3" name="Kick.wav" compile="0" resource="1" file="DrumSamples/Kick.wav"/>
         <FILE id="jezoTa" name="Snare.wav" compile="0" resource="1" file="DrumSamples/Snare.wav"/>
+        <FILE id="VvEhp0" name="Parchment.png" compile="0" resource="1" file="DrumifyAssets/Parchment.png"/>
         <FILE id="veMKYj" name="Home.png" compile="0" resource="1" file="DrumifyAssets/Home.png"/>
         <FILE id="6u3BCu" name="About.png" compile="0" resource="1" file="DrumifyAssets/About.png"/>
         <FILE id="EpUw6a" name="SettingsMenuStatic.png" compile="0" resource="1" file="DrumifyAssets/SettingsMenuStatic.png"/>

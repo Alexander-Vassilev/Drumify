@@ -311,6 +311,7 @@ DrumifyAssets::DrumifyAssets()
     sliderStrip.load  (BinaryData::SliderStrip_png,        BinaryData::SliderStrip_pngSize);
     about.load        (BinaryData::About_png,              BinaryData::About_pngSize);
     home.load         (BinaryData::Home_png,               BinaryData::Home_pngSize);
+    parchment.load    (BinaryData::Parchment_png,          BinaryData::Parchment_pngSize);
     labelSaveOutput.load (BinaryData::SaveSaveOutput_png,  BinaryData::SaveSaveOutput_pngSize);
 }
 
@@ -864,38 +865,159 @@ void MicrophoneComponent::paint (juce::Graphics& g)
 InfoPageComponent::InfoPageComponent (const DrumifyAssets& a)
     : assets (a)
 {
-    body.setMultiLine (true);
-    body.setReadOnly (true);
-    body.setScrollbarsShown (true);
-    body.setCaretVisible (false);
-    body.setPopupMenuEnabled (false);
-    body.setFont (DrumifyTheme::mono (24.0f));
-    body.setLineSpacing (1.18f);
-    body.setColour (juce::TextEditor::backgroundColourId,     juce::Colours::transparentBlack);
-    body.setColour (juce::TextEditor::outlineColourId,        juce::Colours::transparentBlack);
-    body.setColour (juce::TextEditor::focusedOutlineColourId, juce::Colours::transparentBlack);
-    body.setColour (juce::TextEditor::textColourId,           DrumifyTheme::ink);
-    body.setText (infoPanelText, false);
-    addAndMakeVisible (body);
+    using namespace DrumifyLayout;
+
+    setMouseCursor (juce::MouseCursor::DraggingHandCursor);
+
+    juce::AttributedString copy;
+    copy.setText (infoPanelText);
+    copy.setFont (DrumifyTheme::mono (aboutBodyFontHeight));
+    copy.setColour (DrumifyTheme::ink);
+    copy.setLineSpacing (aboutBodyLineGap);
+    copy.setJustification (juce::Justification::topLeft);
+
+    // The editor is a fixed size, so the column is too and this is laid out
+    // once rather than on every resized() - which the page slide would call
+    // sixty times a second.
+    layout.createLayout (copy, (float) bodyArea().getWidth());
+
+    buildPageImage();
+}
+
+void InfoPageComponent::buildPageImage()
+{
+    using namespace DrumifyLayout;
+
+    const int width  = bodyArea().getWidth();
+    const int height = juce::roundToInt (layout.getHeight()) + aboutShadowRoom;
+
+    // The copy is drawn once, shadow and all, and each paint blits the slice
+    // on view. Laying out two thousand pixels of text and blurring a shadow
+    // for it on every frame of a drag would not keep up.
+    juce::Image ink (juce::Image::ARGB, width, height, true);
+
+    {
+        juce::Graphics inkGraphics (ink);
+        layout.draw (inkGraphics, { 0.0f, 0.0f, (float) width, layout.getHeight() });
+    }
+
+    pageImage = juce::Image (juce::Image::ARGB, width, height, true);
+
+    juce::Graphics g (pageImage);
+
+    juce::DropShadow (juce::Colours::black.withAlpha (aboutShadowAlpha),
+                      aboutShadowRadius, { 1, 2 }).drawForImage (g, ink);
+
+    // drawForImage leaves the shadow's own alpha as the graphics opacity, and
+    // drawImage multiplies by it - so the copy goes down at a third strength
+    // unless this is put back first.
+    g.setOpacity (1.0f);
+    g.drawImageAt (ink, 0, 0);
+}
+
+juce::Rectangle<int> InfoPageComponent::bodyArea() const
+{
+    using namespace DrumifyLayout;
+    return { aboutBodyX, aboutBodyY, aboutBodyW, canvasHeight - aboutBodyY };
 }
 
 void InfoPageComponent::paint (juce::Graphics& g)
 {
-    assets.about.drawFrame (g, getLocalBounds().toFloat());
+    const auto frame = getLocalBounds().toFloat();
+
+    assets.about.drawFrame (g, frame);
+    assets.parchment.drawFrame (g, frame);
+
+    const auto area = bodyArea();
+    const int fadeHeight = DrumifyLayout::aboutFadeHeight;
+
+    // Below the dissolving band, a straight blit of the matching slice.
+    const int from = juce::roundToInt (scrollOffset) + fadeHeight;
+    const int rows = juce::jmin (area.getHeight() - fadeHeight, pageImage.getHeight() - from);
+
+    if (rows > 0)
+        g.drawImage (pageImage,
+                     area.getX(), area.getY() + fadeHeight, area.getWidth(), rows,
+                     0, from, area.getWidth(), rows);
+
+    drawFadingTop (g, area);
 }
 
-void InfoPageComponent::resized()
+void InfoPageComponent::drawFadingTop (juce::Graphics& g, juce::Rectangle<int> area)
 {
-    using namespace DrumifyLayout;
-    body.setBounds (aboutBodyX, aboutBodyY, aboutBodyW, aboutBodyH);
+    const int height = DrumifyLayout::aboutFadeHeight;
+
+    if (fadeBand.getWidth() != area.getWidth() || fadeBand.getHeight() != height)
+        fadeBand = juce::Image (juce::Image::ARGB, area.getWidth(), height, true);
+    else
+        fadeBand.clear (fadeBand.getBounds());
+
+    {
+        juce::Graphics bandGraphics (fadeBand);
+        bandGraphics.drawImageAt (pageImage, 0, -juce::roundToInt (scrollOffset));
+    }
+
+    // At rest nothing has left the top yet, so the first line stays crisp; the
+    // dissolve deepens as the sheet is pulled up and is in full effect once a
+    // band's worth has gone.
+    const float fade = juce::jmin (1.0f, scrollOffset / (float) height);
+
+    if (fade > 0.0f)
+    {
+        const juce::Image::BitmapData pixels (fadeBand, juce::Image::BitmapData::readWrite);
+
+        for (int y = 0; y < height; ++y)
+        {
+            // Whole at the foot of the band, gone at the very top edge.
+            const float scale = 1.0f - fade * (1.0f - (float) y / (float) height);
+            auto* line = (juce::PixelARGB*) pixels.getLinePointer (y);
+
+            for (int x = 0; x < pixels.width; ++x)
+                line[x].multiplyAlpha (scale);
+        }
+    }
+
+    g.drawImageAt (fadeBand, area.getX(), area.getY());
+}
+
+void InfoPageComponent::setScroll (float newOffset)
+{
+    // The tail is empty sheet past the last line, so the end of the copy can
+    // be pulled clear of the bottom edge rather than stopping against it.
+    const float furthest = juce::jmax (0.0f, layout.getHeight() + DrumifyLayout::aboutBodyTailSpace
+                                               - (float) bodyArea().getHeight());
+    const float clamped = juce::jlimit (0.0f, furthest, newOffset);
+
+    if (clamped != scrollOffset)
+    {
+        scrollOffset = clamped;
+        repaint();
+    }
 }
 
 bool InfoPageComponent::hitTest (int x, int y)
 {
-    // The page covers the whole canvas, but only the copy takes the mouse, so
-    // the "?" that closes it stays clickable underneath.
-    return body.getBounds().contains (x, y);
+    // Only the sheet takes the mouse, so the icons in the top row - the way
+    // back from this page - stay clickable beside it.
+    return assets.parchment.content.contains (x, y);
 }
+
+void InfoPageComponent::mouseDown (const juce::MouseEvent&)
+{
+    dragStartOffset = scrollOffset;
+}
+
+void InfoPageComponent::mouseDrag (const juce::MouseEvent& e)
+{
+    // The sheet follows the hand: drag up and the copy goes up with it.
+    setScroll (dragStartOffset - (float) e.getDistanceFromDragStartY());
+}
+
+void InfoPageComponent::mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& wheel)
+{
+    setScroll (scrollOffset - wheel.deltaY * (float) bodyArea().getHeight());
+}
+
 //==============================================================================
 namespace
 {

@@ -20,6 +20,9 @@ namespace BinaryData
     extern const char*   Snare_wav;
     const int            Snare_wavSize = 23740;
 
+    extern const char*   Parchment_png;
+    const int            Parchment_pngSize = 686795;
+
     extern const char*   Home_png;
     const int            Home_pngSize = 1471;
 
@@ -153,7 +156,7 @@ namespace BinaryData
     const int            MicUploadLoop_pngSize = 12747;
 
     // Number of elements in the namedResourceList and originalFileNames arrays.
-    const int namedResourceListSize = 48;
+    const int namedResourceListSize = 49;
 
     // Points to the start of a list of resource names.
     extern const char* namedResourceList[];
