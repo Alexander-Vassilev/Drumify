@@ -35,7 +35,7 @@ static constexpr float featureWeightScale = 0.8f;
 
 // ZCR gets the loudest voice: it separates hats from everything else by a
 // wide margin, and kicks from snares at their means.
-static constexpr float zcrWeight = 2.0f;
+static constexpr float zcrWeight = 1.5f;
 
 enum class HitType
 {
@@ -212,7 +212,7 @@ const DrumClassParameters hatParams {
         featureWeightScale * 1.0,  // topWeight
         featureWeightScale * 0.1,  // lowWeight
         featureWeightScale * 0.5,  // decayWeight - hat and snare decay overlap, so weight it lightly
-        0.0,                       // zcrWeight - superseded by the highpassed rate
+        zcrWeight,                 // zcrWeight - superseded by the highpassed rate
         zcrWeight                  // highpassZcrWeight
     }
 };
