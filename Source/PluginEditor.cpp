@@ -310,6 +310,7 @@ DrumifyAssets::DrumifyAssets()
     checkmark.load    (BinaryData::Checkmark_png,          BinaryData::Checkmark_pngSize);
     sliderStrip.load  (BinaryData::SliderStrip_png,        BinaryData::SliderStrip_pngSize);
     about.load        (BinaryData::About_png,              BinaryData::About_pngSize);
+    home.load         (BinaryData::Home_png,               BinaryData::Home_pngSize);
     labelSaveOutput.load (BinaryData::SaveSaveOutput_png,  BinaryData::SaveSaveOutput_pngSize);
 }
 
@@ -378,11 +379,42 @@ void DrumifyLookAndFeel::drawCallOutBoxBackground (juce::CallOutBox&, juce::Grap
     g.strokePath (path, juce::PathStrokeType (1.4f));
 }
 
+juce::Rectangle<int> DrumifyLookAndFeel::getTooltipBounds (const juce::String& tipText,
+                                                           juce::Point<int> screenPos,
+                                                           juce::Rectangle<int> parentArea)
+{
+    const auto font = DrumifyTheme::mono (tooltipFontHeight);
+
+    const int w = juce::GlyphArrangement::getStringWidthInt (font, tipText) + 18;
+    const int h = juce::roundToInt (font.getHeight()) + 12;
+
+    // Beside the pointer, flipping to the other side near an edge so the tip
+    // never runs off the plugin.
+    return juce::Rectangle<int> (screenPos.x > parentArea.getCentreX() ? screenPos.x - (w + 12) : screenPos.x + 18,
+                                 screenPos.y > parentArea.getCentreY() ? screenPos.y - (h + 6)  : screenPos.y + 10,
+                                 w, h)
+             .constrainedWithin (parentArea);
+}
+
+void DrumifyLookAndFeel::drawTooltip (juce::Graphics& g, const juce::String& text, int width, int height)
+{
+    const auto bounds = juce::Rectangle<float> ((float) width, (float) height);
+
+    g.setColour (juce::Colours::black.withAlpha (0.7f));
+    g.fillRoundedRectangle (bounds, 5.0f);
+
+    g.setColour (juce::Colours::white);
+    g.setFont (DrumifyTheme::mono (tooltipFontHeight));
+    g.drawText (text, bounds, juce::Justification::centred, false);
+}
+
 //==============================================================================
-AssetButton::AssetButton (const AssetLayer& layerToDraw, const juce::String& buttonName)
+AssetButton::AssetButton (const AssetLayer& layerToDraw, const juce::String& buttonName,
+                          const juce::String& tooltip)
     : juce::Button (buttonName), layer (layerToDraw)
 {
-    setTooltip (buttonName);
+    setTooltip (tooltip.isNotEmpty() ? tooltip : buttonName);
+    setMouseCursor (juce::MouseCursor::PointingHandCursor);
 }
 
 void AssetButton::paintButton (juce::Graphics& g, bool shouldDrawButtonAsHighlighted,
@@ -911,6 +943,31 @@ namespace
     // that can be disabled. The caption fades with its box.
     constexpr int captionRight[] { 0, 0, 0, 0, 758, 758, 662, 579, 0, 1172 };
 
+    // Tooltips are per region rather than per control: the whole block a
+    // control belongs to - its heading, its boxes, its slider and its readout -
+    // answers with the same line, so the tip does not blink on and off as the
+    // pointer crosses the gaps between them. Canvas coordinates, read off the
+    // settings artwork.
+    struct TooltipZone { juce::Rectangle<int> area; const char* text; };
+
+    const TooltipZone tooltipZones[] {
+        // Algorithm
+        { {   0, 199, 430, 217 }, "What drumhits do you want to replace?" },
+        { {   0, 416, 430,  98 }, "How sensitive is Drumify to hearing hits?" },
+        { {   0, 514, 430, 150 }, "What drum types do you want to prioritize?" },
+
+        // Quantization
+        { { 435, 142, 340, 181 }, "What note length do you want to quantize to?" },
+        { { 435, 323, 340,  56 }, "Locks BPM to what your DAW uses" },
+        { { 435, 379, 340,  52 }, "Searches for BPM in filename and locks to it" },
+        { { 435, 431, 340, 127 }, "What BPM do you want to quantize to?" },
+        { { 435, 558, 340, 102 }, "How much 1/16th note swing do you want?" },
+
+        // Stretching
+        { { 855, 143, 334, 188 }, "Equally change spacing between drumhits in time" },
+        { { 855, 331, 334,  54 }, "Stretch to BPM rather than by a factor" }
+    };
+
     const char* const quantizeNames[] { "1/32", "1/16 t", "1/16", "1/8 t", "1/8", "1/4 t", "1/4" };
     constexpr double quantizeDivisions[] { 1.0 / 32, 1.0 / 24, 1.0 / 16, 1.0 / 12, 1.0 / 8, 1.0 / 6, 1.0 / 4 };
     constexpr int numQuantizeSteps = 7;
@@ -925,13 +982,16 @@ namespace
 SettingsPageComponent::SettingsPageComponent (const DrumifyAssets& a, HackBrownAudioProcessor& p)
     : assets (a), processor (p)
 {
-    setMouseCursor (juce::MouseCursor::PointingHandCursor);
-
     // The three replace toggles mirror the processor rather than defaulting
     // here, so reopening the page always shows what is actually in force.
     checked[kicks]  = processor.replaceKick;
     checked[snares] = processor.replaceSnare;
     checked[hats]   = processor.replaceHat;
+
+    // Quantised to the host's tempo out of the box - the loop is headed for a
+    // DAW - matching the processor's own defaults.
+    checked[quantize] = true;
+    checked[lockHost] = true;
 
     // Musically sensible resting positions. Stretch must start at 1x - it is
     // wired to playbackSpeed, and ticking "Stretch output" should not warp the
@@ -1001,17 +1061,42 @@ int SettingsPageComponent::slideAt (juce::Point<int> p) const
 
 bool SettingsPageComponent::hitTest (int x, int y)
 {
-    // Only live controls take the mouse, so the pointing hand and the clicks
-    // both stop at anything drawn at low opacity.
+    // The whole of a tooltip zone takes the mouse, disabled controls included,
+    // so that every part of a block can explain itself. Acting on a control is
+    // blocked in mouseDown and toggle(); the cursor below says which are live.
     const juce::Point<int> p { x, y };
 
+    for (const auto& zone : tooltipZones)
+        if (zone.area.contains (p))
+            return true;
+
+    return checkAt (p) >= 0 || slideAt (p) >= 0;
+}
+
+juce::String SettingsPageComponent::getTooltip()
+{
+    const auto p = getMouseXYRelative();
+
+    for (const auto& zone : tooltipZones)
+        if (zone.area.contains (p))
+            return zone.text;
+
+    return {};
+}
+
+juce::MouseCursor SettingsPageComponent::getMouseCursor()
+{
+    const auto p = getMouseXYRelative();
+
     if (const int c = checkAt (p); c >= 0)
-        return isEnabled ((Check) c);
+        return isEnabled ((Check) c) ? juce::MouseCursor::PointingHandCursor
+                                     : juce::MouseCursor::NormalCursor;
 
     if (const int sl = slideAt (p); sl >= 0)
-        return isEnabled ((Slide) sl);
+        return isEnabled ((Slide) sl) ? juce::MouseCursor::PointingHandCursor
+                                      : juce::MouseCursor::NormalCursor;
 
-    return false;
+    return juce::MouseCursor::NormalCursor;
 }
 
 void SettingsPageComponent::toggle (Check c)
@@ -1106,6 +1191,11 @@ juce::String SettingsPageComponent::readout (Slide sl) const
             return quantizeNames[juce::jlimit (0, numQuantizeSteps - 1, juce::roundToInt (v * (numQuantizeSteps - 1)))];
 
         case bpm:
+            // Locked to the host or a file, the readout shows the tempo the
+            // grid is actually using, so it is visible where it came from.
+            if (checked[lockHost] || checked[lockFile])
+                return juce::String (juce::roundToInt ((float) processor.effectiveQuantizeBpm())) + " BPM";
+
             return juce::String (juce::roundToInt (10.0f + v * 210.0f)) + " BPM";
 
         case stretch:
@@ -1309,6 +1399,7 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
     updateButton.onClick   = [this] { audioProcessor.reconstructLoopFromHits(); };
     plusButton.onClick     = [this] { toggleSettingsPage(); };
     questionButton.onClick = [this] { toggleInfoPage(); };
+    homeButton.onClick     = [this] { goHome(); };
 
     formatManager.registerBasicFormats();
 
@@ -1323,6 +1414,20 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
     addAndMakeVisible (infoPage);
     addAndMakeVisible (settingsPage);
     addAndMakeVisible (saveButtons);
+
+    // Above the pages, since it sits over them rather than sliding with the
+    // controls; resized() shows it only once a page is on its way in.
+    addChildComponent (homeButton);
+
+    // Children added in this body land above the tooltip window, which was
+    // parented during member initialisation, so put it back on top.
+    tooltipWindow.toFront (false);
+
+    // TooltipWindow declares itself opaque, so the page behind it is left
+    // unpainted and our translucent box composites onto whatever the buffer
+    // still held - which darkens a little with every repaint. Telling JUCE the
+    // truth makes the parent redraw underneath and keeps the box at its 30%.
+    tooltipWindow.setOpaque (false);
 
     setSize (DrumifyLayout::canvasWidth, DrumifyLayout::canvasHeight);
 }
@@ -1396,19 +1501,28 @@ void HackBrownAudioProcessorEditor::resized()
 
     int x = menuRight - total;
 
+    // The whole row leaves with the controls; the home button takes the "?"
+    // slot behind it and is the way back from either page.
     for (size_t i = 0; i < widths.size(); ++i)
     {
-        // The icon that opened a page stays put as the way back from it; the
-        // other two leave with the controls. "?" holds its place while the
-        // about page is in view (a positive slide), "+" while settings is.
-        const bool holds = (icons[i].first == &questionButton && slideProgress > 0.0f)
-                        || (icons[i].first == &plusButton     && slideProgress < 0.0f);
-        const auto iconShift = holds ? 0 : shift;
-
-        icons[i].first->setBounds (x - padding + iconShift, menuCentreY - menuIconHeight / 2 - padding,
+        icons[i].first->setBounds (x - padding + shift, menuCentreY - menuIconHeight / 2 - padding,
                                    widths[i] + padding * 2, menuIconHeight + padding * 2);
         x += widths[i] + menuGap;
     }
+
+    // Right-aligned to the row's edge, so it lands where the "?" was. Drawn a
+    // little smaller than the row's height: the house is nearly square, and at
+    // the full height it would tower over the glyphs it stands in for.
+    homeButton.setBounds (juce::Rectangle<int> (homeIconHeight + padding * 2,
+                                                homeIconHeight + padding * 2)
+                            .withCentre ({ menuRight - homeIconHeight / 2, menuCentreY }));
+
+    // It fades in as the page arrives and is only live once there is a page to
+    // come back from.
+    const auto pageProgress = std::abs (slideProgress);
+
+    homeButton.setVisible (pageProgress > 0.001f);
+    homeButton.setAlpha (pageProgress);
 }
 
 //==============================================================================
@@ -1493,6 +1607,13 @@ void HackBrownAudioProcessorEditor::toggleSettingsPage()
 {
     settingsPageVisible = ! settingsPageVisible;
     infoPageVisible = false;
+    startTimerHz (60);
+}
+
+void HackBrownAudioProcessorEditor::goHome()
+{
+    infoPageVisible = false;
+    settingsPageVisible = false;
     startTimerHz (60);
 }
 

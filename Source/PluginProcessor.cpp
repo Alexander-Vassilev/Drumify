@@ -333,7 +333,7 @@ double HackBrownAudioProcessor::effectiveQuantizeBpm() const
     switch (bpmSource)
     {
         case BpmSource::file:     return fileBpm > 0.0 ? fileBpm : quantizeBpm;
-        case BpmSource::host:     return quantizeBpm;   // no host tempo is read yet
+        case BpmSource::host:     { const auto bpm = hostBpm.load(); return bpm > 0.0 ? bpm : quantizeBpm; }
         case BpmSource::selected: break;
     }
 
@@ -853,6 +853,16 @@ void HackBrownAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
         buffer.clear();
         return;
     }
+
+    // The play head is only valid inside this call, so the tempo is copied out
+    // here for the message thread to quantise against. Left as it was when the
+    // host has nothing to say, so a transient gap does not drop the grid back
+    // to the selected BPM.
+    if (auto* playHead = getPlayHead())
+        if (const auto position = playHead->getPosition())
+            if (const auto bpm = position->getBpm())
+                if (*bpm > 0.0)
+                    hostBpm.store (*bpm);
     
     const bool recording = recordingEnabled.load();
 

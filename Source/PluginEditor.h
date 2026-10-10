@@ -44,6 +44,7 @@ namespace DrumifyLayout
 
     // Top row. The title is a canvas-aligned layer; only the icons need placing.
     constexpr int menuRight = 1150, menuCentreY = 60, menuIconHeight = 58, menuGap = 34;
+    constexpr int homeIconHeight = 58;
 
     // The drum layers are exported already aligned to the canvas, so they are
     // drawn full-frame and their caption is placed under the kit.
@@ -132,6 +133,9 @@ struct DrumifyAssets
 
     // The about page's heading, in the title slot.
     AssetLayer about;
+
+    // The top-row icon that returns to the main page from either page.
+    AssetLayer home;
 };
 
 //==============================================================================
@@ -148,6 +152,12 @@ public:
     void drawButtonText (juce::Graphics&, juce::TextButton&, bool, bool) override;
     void drawCallOutBoxBackground (juce::CallOutBox&, juce::Graphics&,
                                    const juce::Path&, juce::Image&) override;
+
+    juce::Rectangle<int> getTooltipBounds (const juce::String& tipText, juce::Point<int> screenPos,
+                                           juce::Rectangle<int> parentArea) override;
+    void drawTooltip (juce::Graphics&, const juce::String& text, int width, int height) override;
+
+    static constexpr float tooltipFontHeight = 16.0f;
 };
 
 //==============================================================================
@@ -155,7 +165,11 @@ public:
 class AssetButton : public juce::Button
 {
 public:
-    AssetButton (const AssetLayer& layerToDraw, const juce::String& buttonName);
+    /** `tooltip` says what the button does, since none of the icons carry a
+        caption; it falls back to the name when there is nothing to add.
+    */
+    AssetButton (const AssetLayer& layerToDraw, const juce::String& buttonName,
+                 const juce::String& tooltip = {});
 
     void paintButton (juce::Graphics&, bool shouldDrawButtonAsHighlighted,
                       bool shouldDrawButtonAsDown) override;
@@ -363,7 +377,8 @@ private:
     here. Only the replace toggles and the stretch factor drive anything yet -
     the rest is interaction without effect, until the features behind it exist.
 */
-class SettingsPageComponent : public juce::Component
+class SettingsPageComponent : public juce::Component,
+                              public juce::TooltipClient
 {
 public:
     SettingsPageComponent (const DrumifyAssets&, HackBrownAudioProcessor&);
@@ -374,6 +389,12 @@ public:
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
     void mouseUp (const juce::MouseEvent&) override;
+
+    /** The page is one component, so both of these answer for whichever
+        control the mouse is over rather than for the page as a whole.
+    */
+    juce::String getTooltip() override;
+    juce::MouseCursor getMouseCursor() override;
 
 private:
     enum Check { kicks, snares, hats, quantize, lockHost, lockFile, selectBpm, swing,
@@ -481,6 +502,7 @@ private:
     */
     void toggleInfoPage();
     void toggleSettingsPage();
+    void goHome();
     void timerCallback() override;
     void toggleRecording();
     void loadDrumSample (DrumType);
@@ -509,9 +531,16 @@ private:
     DrumifyAssets assets;                 // must outlive the components below
     DrumifyLookAndFeel drumifyLookAndFeel;
 
-    AssetButton updateButton   { assets.menuUpdate,   "Rebuild Loop" };
-    AssetButton plusButton     { assets.menuPlus,     "Settings" };
-    AssetButton questionButton { assets.menuQuestion, "About" };
+    AssetButton updateButton   { assets.menuUpdate,   "Rebuild Loop",
+                                 "Analyse the last take again and rebuild the loop" };
+    AssetButton plusButton     { assets.menuPlus,     "Settings",
+                                 "Settings menu..." };
+    AssetButton questionButton { assets.menuQuestion, "About",
+                                 "About Drumify and how to use it!" };
+
+    // Takes the "?" slot while either page is open, and is the only way back.
+    AssetButton homeButton     { assets.home,         "Home",
+                                 "Back to the main page" };
 
     InfoPageComponent infoPage { assets };
     SettingsPageComponent settingsPage { assets, audioProcessor };
@@ -530,6 +559,10 @@ private:
     std::unique_ptr<juce::FileChooser> chooser;
 
 
+
+    // Parented to the editor rather than the desktop, which is what a plugin
+    // wants: a desktop tooltip window misbehaves inside some hosts.
+    juce::TooltipWindow tooltipWindow { this, 1000 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HackBrownAudioProcessorEditor)
 };

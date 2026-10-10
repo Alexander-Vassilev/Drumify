@@ -146,8 +146,8 @@ public:
     // the timing code never sees a slider. Message thread only.
     enum class BpmSource { selected, host, file };
 
-    bool      quantizeEnabled  = false;
-    BpmSource bpmSource        = BpmSource::selected;
+    bool      quantizeEnabled  = true;
+    BpmSource bpmSource        = BpmSource::host;
     double    quantizeBpm      = 120.0;         // the "Select BPM" slider
     double    quantizeDivision = 1.0 / 16.0;    // grid step as a fraction of a whole note
     double    swingAmount      = 0.0;           // 0 straight .. 1 full swing
@@ -156,6 +156,12 @@ public:
         Set by processUploadedLoop; a live take clears it.
     */
     double fileBpm = 0.0;
+
+    /** The host's tempo, refreshed from the play head on every block, or 0
+        where there is none - the standalone app, or a host that reports no
+        tempo. Written on the audio thread, read at render.
+    */
+    std::atomic<double> hostBpm { 0.0 };
 
     /** The tempo the grid actually uses, resolved from bpmSource. A source
         with nothing to offer - a file with no tempo in its name, or the host
