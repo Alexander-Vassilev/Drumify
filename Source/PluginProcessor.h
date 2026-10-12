@@ -37,16 +37,24 @@ public:
                       double maxSampleLengthSeconds)
         : juce::SamplerSound (name, source, midiNotes, midiNoteForNormalPitch,
                               attackTimeSecs, releaseTimeSecs, maxSampleLengthSeconds),
-          midiNote (midiNoteForNormalPitch)
+          midiNote (midiNoteForNormalPitch),
+          sourceRate (source.sampleRate)
     {
     }
 
     int getMidiNote() const noexcept { return midiNote; }
 
+    /** The rate the sample was read at. SamplerSound keeps this private, and
+        saving the plugin's state needs it to write the sample back out at the
+        rate it will be read in again.
+    */
+    double getSourceSampleRate() const noexcept { return sourceRate; }
+
     using Ptr = juce::ReferenceCountedObjectPtr<DrumSamplerSound>;
 
 private:
     const int midiNote;
+    const double sourceRate;
 };
 
 /** Which audio the preview speakers play back. */
@@ -109,6 +117,29 @@ public:
     
     void reconstructLoopFromHits();
     void getLongestSampleLengthInSamples();
+
+    /** State that belongs to the editor but has to live here. A host destroys
+        the editor every time its window is closed and builds a fresh one when
+        it is reopened, so anything the editor alone remembers is gone when it
+        comes back - which is why the loaded samples and the rendered loop
+        survive a close and the settings used not to. The vectors are empty
+        until an editor has saved into them once.
+    */
+    struct EditorState
+    {
+        std::vector<char> checkedBoxes;    // the settings page's checkboxes
+        std::vector<float> sliderValues;   // its sliders, as knob positions
+        int openPage = 0;                  // -1 settings, 0 main, +1 about
+        float aboutScroll = 0.0f;          // how far the about page was dragged
+    };
+
+    EditorState editorState;
+
+    /** The plugin's state is versioned, so a file written by an older build is
+        recognised and declined rather than read as nonsense.
+    */
+    static constexpr int stateMagic = 0x464d5244;   // 'DRMF', little-endian
+    static constexpr int stateVersion = 1;
 
     /** The classified hits with their final timing: the analysis result from
         inputProcessor.classifiedHits, copied, with quantisation applied to
@@ -199,6 +230,12 @@ private:
     /** Sets the onset detector's absolute threshold from `sensitivity`. */
     void applySensitivity();
 
+    /** Moves a take read from the plugin's state into capturedInput, once that
+        has been sized. setStateInformation can run either side of
+        prepareToPlay, so this is called from both and does nothing twice.
+    */
+    void applyRestoredInput();
+
     /** Feeds `numSamples` of mono audio through onset detection and hit
         extraction in block-sized chunks, then flushes the last hit.
     */
@@ -285,6 +322,10 @@ private:
     static constexpr double maxCapturedInputSeconds = 60.0;
     juce::AudioBuffer<float> capturedInput;
     std::atomic<int> capturedInputLength { 0 };
+
+    // A take read back from the plugin's state, held until prepareToPlay has
+    // sized capturedInput for it. Empty at every other moment.
+    juce::AudioBuffer<float> restoredInput;
     int startSample = 0; // The sample number of the first hit in the input
     bool wasRecording = false;   // audio thread only; detects the start of a take
     int renderedReadPos = 0;

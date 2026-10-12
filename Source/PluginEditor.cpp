@@ -41,9 +41,9 @@ static const char* const infoPanelText =
     "hats, although feel free to experiment and throw in whatever you want!\n"
     "\n"
     "Microphone: Click the top half of the capsule to record beatboxing or any live sound, then "
-    "click again to stop. As an alternative input method, click the bottom half of the capsule "
-    "to load an input loop. After doing either of these, Drumify will detect all of the drum hits "
-    "and replace them in real time!\n"
+    "click again to stop. As an alternative input method, click the bottom half of the capsule or "
+    "drag and drop to load an input loop. After doing either of these, Drumify will detect all of "
+    "the drum hits and replace them in real time!\n"
     "\n"
     "Speakers: The left speaker previews your input so you can hear the original, and the right "
     "speaker plays the replaced drumhits!\n"
@@ -54,8 +54,27 @@ static const char* const infoPanelText =
     "\n"
     "Menu: The question mark shows the info page (You happen to be looking at it), which you can "
     "revisit at any time. The plus button shows advanced settings, which lets you change "
-    "Drumify's algorithm. The rotating arrows update the output, if you are happy with the "
-    "input but replaced your samples or changed the algorithm.\n";
+    "Drumify's algorithm. The rotating arrows update the output, if you are happy with the input "
+    "but replaced your samples or changed the settings. Here is an overview of all of the "
+    "settings:\n"
+    "\n"
+    "Replace: Provides control over which drum hits get replaced\n"
+    "Sensitivity: Determines how likely Drumify is to pick up a given hit. Pushing the slider to "
+    "the right makes quieter sounds more detectable.\n"
+    "Prefer: Pushes the detection algorithm in favour of certain drumhits. Useful if you feel "
+    "that Drumify misunderstood your intentions.\n"
+    "\n"
+    "Quantize: Snap the output to line up with specific temporal intervals as defined by a "
+    "preset tempo.\n"
+    "Lock BPM to host: Identifies the BPM of your DAW and quantizes to it\n"
+    "Lock BPM to file: Searches for a BPM in your input file name and quantizes to it\n"
+    "Select BPM: Select your own BPM to quantize to\n"
+    "Swing: Add some 1/16th note swing to the quantization\n"
+    "\n"
+    "Stretch output: Spaces the hits apart by a fixed factor, resulting in high quality time "
+    "stretching without changing the pitch or timing of the original samples\n"
+    "Musical stretch: Stretch to a certain tempo relative to the quantization BPM, if "
+    "activated.\n";
 
 //==============================================================================
 juce::Font DrumifyTheme::mono (float height, bool bold)
@@ -869,12 +888,32 @@ InfoPageComponent::InfoPageComponent (const DrumifyAssets& a)
 
     setMouseCursor (juce::MouseCursor::DraggingHandCursor);
 
+    const auto regular = DrumifyTheme::mono (aboutBodyFontHeight);
+    const auto bold    = DrumifyTheme::mono (aboutBodyFontHeight, true);
+
     juce::AttributedString copy;
-    copy.setText (infoPanelText);
-    copy.setFont (DrumifyTheme::mono (aboutBodyFontHeight));
-    copy.setColour (DrumifyTheme::ink);
     copy.setLineSpacing (aboutBodyLineGap);
     copy.setJustification (juce::Justification::topLeft);
+
+    // Built a line at a time rather than set in one go, so the heading that
+    // opens a line can be set in bold and the rest of the line left as it is.
+    const auto lines = juce::StringArray::fromLines (infoPanelText);
+
+    for (int i = 0; i < lines.size(); ++i)
+    {
+        const auto line = lines[i] + (i < lines.size() - 1 ? "\n" : "");
+        const auto colon = line.indexOfChar (':');
+
+        if (colon >= 0 && colon < aboutHeadingMaxLength)
+        {
+            copy.append (line.substring (0, colon + 1), bold, DrumifyTheme::ink);
+            copy.append (line.substring (colon + 1), regular, DrumifyTheme::ink);
+        }
+        else
+        {
+            copy.append (line, regular, DrumifyTheme::ink);
+        }
+    }
 
     // The editor is a fixed size, so the column is too and this is laid out
     // once rather than on every resized() - which the page slide would call
@@ -1124,6 +1163,37 @@ SettingsPageComponent::SettingsPageComponent (const DrumifyAssets& a, HackBrownA
     value[swingAmount]    = 0.0f;
     value[stretch]        = 0.5f;                             // 1x on the log scale
     value[biasKick] = value[biasSnare] = value[biasHat] = 0.5f;   // 1x: no bias
+
+    // ...unless an earlier editor left its settings behind, in which case the
+    // defaults above were only ever a starting point for the first one.
+    restoreState();
+}
+
+void SettingsPageComponent::saveState()
+{
+    auto& saved = processor.editorState;
+
+    saved.checkedBoxes.assign (checked.begin(), checked.end());
+    saved.sliderValues.assign (value.begin(), value.end());
+}
+
+bool SettingsPageComponent::restoreState()
+{
+    const auto& saved = processor.editorState;
+
+    // Sized only by an editor that has run; a mismatch means the page has
+    // gained or lost a control since, so the defaults are the safer start.
+    if (saved.checkedBoxes.size() != (size_t) numChecks
+        || saved.sliderValues.size() != (size_t) numSlides)
+        return false;
+
+    for (int i = 0; i < numChecks; ++i)
+        checked[i] = saved.checkedBoxes[(size_t) i] != 0;
+
+    for (int i = 0; i < numSlides; ++i)
+        value[i] = saved.sliderValues[(size_t) i];
+
+    return true;
 }
 
 float SettingsPageComponent::sliderScale (Slide sl) const
@@ -1362,6 +1432,10 @@ void SettingsPageComponent::applyToProcessor (Rerender level)
                                                                 juce::roundToInt (value[quantizeAmount] * (numQuantizeSteps - 1)))];
     processor.swingAmount      = checked[swing] ? (double) value[swingAmount] : 0.0;
 
+    // Every change comes through here, so this is the one place the knob
+    // positions need recording for the next editor.
+    saveState();
+
     // Analysis: the sensitivity is picked up by the detector at the start of
     // the next take, or right now by a re-analysis; the bias by the next
     // classification.
@@ -1551,11 +1625,25 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
     // truth makes the parent redraw underneath and keeps the box at its 30%.
     tooltipWindow.setOpaque (false);
 
+    // Come back to the page the last editor was on, already in place: the
+    // window reopening is not a navigation, so there is nothing to animate.
+    const auto page = audioProcessor.editorState.openPage;
+
+    infoPageVisible     = page > 0;
+    settingsPageVisible = page < 0;
+    slideProgress       = (float) page;
+
+    infoPage.setScroll (audioProcessor.editorState.aboutScroll);
+
     setSize (DrumifyLayout::canvasWidth, DrumifyLayout::canvasHeight);
 }
 
 HackBrownAudioProcessorEditor::~HackBrownAudioProcessorEditor()
 {
+    // The about page's scroll changes continuously, so unlike the settings it
+    // is recorded on the way out rather than on every move.
+    audioProcessor.editorState.aboutScroll = infoPage.getScroll();
+
     setLookAndFeel (nullptr);
 }
 
@@ -1722,6 +1810,7 @@ void HackBrownAudioProcessorEditor::toggleInfoPage()
 {
     infoPageVisible = ! infoPageVisible;
     settingsPageVisible = false;   // the two pages leave in opposite directions, so never both
+    rememberOpenPage();
     startTimerHz (60);
 }
 
@@ -1729,6 +1818,7 @@ void HackBrownAudioProcessorEditor::toggleSettingsPage()
 {
     settingsPageVisible = ! settingsPageVisible;
     infoPageVisible = false;
+    rememberOpenPage();
     startTimerHz (60);
 }
 
@@ -1736,7 +1826,13 @@ void HackBrownAudioProcessorEditor::goHome()
 {
     infoPageVisible = false;
     settingsPageVisible = false;
+    rememberOpenPage();
     startTimerHz (60);
+}
+
+void HackBrownAudioProcessorEditor::rememberOpenPage()
+{
+    audioProcessor.editorState.openPage = infoPageVisible ? 1 : (settingsPageVisible ? -1 : 0);
 }
 
 void HackBrownAudioProcessorEditor::timerCallback()

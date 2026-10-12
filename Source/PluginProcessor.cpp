@@ -25,6 +25,13 @@ HackBrownAudioProcessor::HackBrownAudioProcessor()
 #endif
 {
     formatManager.registerBasicFormats();
+
+    // Set here rather than only in prepareToPlay: a host may restore the
+    // plugin's state before preparing it, and the restore loads samples by
+    // note.
+    drumMidiMap[kick]  = 36;
+    drumMidiMap[snare] = 38;
+    drumMidiMap[hat]   = 42;
 }
 
 HackBrownAudioProcessor::~HackBrownAudioProcessor()
@@ -477,6 +484,11 @@ void HackBrownAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlo
     capturedInputLength.store(0);
     wasRecording = false;
 
+    // A take restored from the plugin's state has been waiting for the buffer
+    // above to exist. Done before the defaults below so the rest of
+    // prepareToPlay sees the real length.
+    applyRestoredInput();
+
     drumMidiMap[kick]  = 36;
     drumMidiMap[snare] = 38;
     drumMidiMap[hat]   = 42;
@@ -926,17 +938,298 @@ juce::AudioProcessorEditor* HackBrownAudioProcessor::createEditor()
 }
 
 //==============================================================================
+namespace
+{
+    // Audio in the plugin's state is plain little-endian float samples behind a
+    // small header - no codec, so what comes back is bit-for-bit what went in.
+    void writeAudioChunk (juce::MemoryOutputStream& out, const juce::AudioBuffer<float>& buffer,
+                          int numSamples, double sampleRate)
+    {
+        const int channels = (numSamples > 0 ? buffer.getNumChannels() : 0);
+        const int samples  = (channels > 0 ? juce::jmin (numSamples, buffer.getNumSamples()) : 0);
+
+        out.writeInt (channels > 0 ? channels : 0);
+        out.writeInt (samples);
+        out.writeDouble (sampleRate);
+
+        for (int channel = 0; channel < channels; ++channel)
+            out.write (buffer.getReadPointer (channel), (size_t) samples * sizeof (float));
+    }
+
+    bool readAudioChunk (juce::MemoryInputStream& in, juce::AudioBuffer<float>& buffer, double& sampleRate)
+    {
+        const int channels = in.readInt();
+        const int samples  = in.readInt();
+        sampleRate = in.readDouble();
+
+        // A truncated or corrupt block must not be able to ask for a buffer
+        // larger than the bytes that are actually there.
+        if (channels <= 0 || samples <= 0 || channels > 16
+            || (juce::int64) channels * samples * (juce::int64) sizeof (float) > in.getNumBytesRemaining())
+        {
+            buffer.setSize (0, 0);
+            return false;
+        }
+
+        buffer.setSize (channels, samples);
+
+        for (int channel = 0; channel < channels; ++channel)
+            in.read (buffer.getWritePointer (channel), (int) ((size_t) samples * sizeof (float)));
+
+        return true;
+    }
+
+    /** One drum sample, written as a float WAV so it reloads through the same
+        reader path a file from disk takes.
+    */
+    void writeSample (juce::MemoryOutputStream& out, const DrumSamplerSound::Ptr& sound)
+    {
+        juce::MemoryBlock encoded;
+
+        if (sound != nullptr && sound->getAudioData() != nullptr
+            && sound->getAudioData()->getNumSamples() > 0)
+        {
+            const auto& audio = *sound->getAudioData();
+
+            // Scoped: the writer only flushes into the block as it is destroyed.
+            {
+                auto stream = std::unique_ptr<juce::OutputStream> (new juce::MemoryOutputStream (encoded, false));
+
+                juce::WavAudioFormat wav;
+
+                const auto options = juce::AudioFormatWriterOptions{}
+                                        .withSampleRate (sound->getSourceSampleRate())
+                                        .withNumChannels (audio.getNumChannels())
+                                        .withBitsPerSample (32)
+                                        .withSampleFormat (juce::AudioFormatWriterOptions::SampleFormat::floatingPoint);
+
+                if (auto writer = wav.createWriterFor (stream, options))
+                    writer->writeFromAudioSampleBuffer (audio, 0, audio.getNumSamples());
+            }
+        }
+
+        out.writeString (sound != nullptr ? sound->getName() : juce::String());
+        out.writeInt ((int) encoded.getSize());
+        out.write (encoded.getData(), encoded.getSize());
+    }
+}
+
+void HackBrownAudioProcessor::applyRestoredInput()
+{
+    const int length = restoredInput.getNumSamples();
+
+    if (length <= 0 || restoredInput.getNumChannels() <= 0 || capturedInput.getNumSamples() <= 0)
+        return;
+
+    const int toCopy = juce::jmin (length, capturedInput.getNumSamples());
+
+    capturedInput.clear();
+    capturedInput.copyFrom (0, 0, restoredInput, 0, 0, toCopy);
+    capturedInputLength.store (toCopy);
+
+    restoredInput.setSize (0, 0);
+}
+
 void HackBrownAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
 {
-    // You should use this method to store your parameters in the memory block.
-    // You could do that either as raw data, or use the XML or ValueTree classes
-    // as intermediaries to make it easy to save and load complex data.
+    juce::MemoryOutputStream out (destData, false);
+
+    out.writeInt (stateMagic);
+    out.writeInt (stateVersion);
+
+    // --- what the settings page drives ---
+    out.writeBool (replaceKick);
+    out.writeBool (replaceSnare);
+    out.writeBool (replaceHat);
+    out.writeFloat (playbackSpeed);
+    out.writeBool (quantizeEnabled);
+    out.writeInt ((int) bpmSource);
+    out.writeDouble (quantizeBpm);
+    out.writeDouble (quantizeDivision);
+    out.writeDouble (swingAmount);
+    out.writeDouble (fileBpm);
+    out.writeFloat (sensitivity.load());
+    out.writeDouble (inputProcessor.classBias.kick);
+    out.writeDouble (inputProcessor.classBias.snare);
+    out.writeDouble (inputProcessor.classBias.hat);
+
+    // --- the editor's own state, so the window reopens where it was left ---
+    out.writeInt (editorState.openPage);
+    out.writeFloat (editorState.aboutScroll);
+
+    out.writeInt ((int) editorState.checkedBoxes.size());
+
+    for (const auto box : editorState.checkedBoxes)
+        out.writeByte (box);
+
+    out.writeInt ((int) editorState.sliderValues.size());
+
+    for (const auto value : editorState.sliderValues)
+        out.writeFloat (value);
+
+    // --- the loaded drum samples ---
+    for (const auto drum : { kick, snare, hat })
+        writeSample (out, getSoundForNote (drumMidiMap[drum]));
+
+    // --- the take or uploaded loop, exactly as it came in ---
+    writeAudioChunk (out, capturedInput, capturedInputLength.load(), currentSampleRate);
+
+    // --- and the loop Drumify built from it ---
+    writeAudioChunk (out, renderedDrumBuffer, renderedDrumBuffer.getNumSamples(), currentSampleRate);
+
+    // --- the analysis, so the loop can be rebuilt when a setting changes ---
+    out.writeInt ((int) inputProcessor.classifiedHits.size());
+
+    for (const auto& hit : inputProcessor.classifiedHits)
+    {
+        out.writeInt (hit.hitIndex);
+        out.writeInt (hit.onsetSample);
+        out.writeInt ((int) hit.type);
+        out.writeFloat (hit.rms);
+        out.writeFloat (hit.zcr);
+        out.writeFloat (hit.durationSec);
+    }
+
+    // The audio of each detected hit, which an unreplaced drum plays instead
+    // of a sample. Only the part of each buffer that was actually filled.
+    const int numStored = juce::jlimit (0, InputProcessor::numHits, inputProcessor.storedHitsIndex);
+
+    out.writeInt (numStored);
+
+    for (int i = 0; i < numStored; ++i)
+    {
+        const auto& hit = inputProcessor.storedHits[(size_t) i];
+        const int length = hit.buffer.getNumChannels() > 0
+                             ? juce::jmax (0, juce::jmin (hit.hitLength, hit.buffer.getNumSamples()))
+                             : 0;
+
+        out.writeInt (hit.onsetSample);
+        out.writeInt (length);
+        out.writeInt ((int) hit.type);
+
+        if (length > 0)
+            out.write (hit.buffer.getReadPointer (0), (size_t) length * sizeof (float));
+    }
 }
 
 void HackBrownAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
 {
-    // You should use this method to restore your parameters from this memory block,
-    // whose contents will have been created by the getStateInformation() call.
+    if (data == nullptr || sizeInBytes < 8)
+        return;
+
+    juce::MemoryInputStream in (data, (size_t) sizeInBytes, false);
+
+    if (in.readInt() != stateMagic || in.readInt() != stateVersion)
+        return;   // written by another build: leave the defaults alone
+
+    // The buffers below are swapped out from under playAudio, so stop it first.
+    isPlaybackOn.store (false);
+
+    replaceKick  = in.readBool();
+    replaceSnare = in.readBool();
+    replaceHat   = in.readBool();
+    playbackSpeed = in.readFloat();
+    quantizeEnabled = in.readBool();
+    bpmSource = (BpmSource) juce::jlimit (0, 2, in.readInt());
+    quantizeBpm = in.readDouble();
+    quantizeDivision = in.readDouble();
+    swingAmount = in.readDouble();
+    fileBpm = in.readDouble();
+    sensitivity.store (in.readFloat());
+    inputProcessor.classBias.kick  = in.readDouble();
+    inputProcessor.classBias.snare = in.readDouble();
+    inputProcessor.classBias.hat   = in.readDouble();
+
+    applySensitivity();
+
+    editorState.openPage = in.readInt();
+    editorState.aboutScroll = in.readFloat();
+
+    const int numChecks = juce::jlimit (0, 64, in.readInt());
+    editorState.checkedBoxes.clear();
+
+    for (int i = 0; i < numChecks; ++i)
+        editorState.checkedBoxes.push_back ((char) in.readByte());
+
+    const int numSliders = juce::jlimit (0, 64, in.readInt());
+    editorState.sliderValues.clear();
+
+    for (int i = 0; i < numSliders; ++i)
+        editorState.sliderValues.push_back (in.readFloat());
+
+    for (const auto drum : { kick, snare, hat })
+    {
+        const auto name = in.readString();
+        const int encodedSize = in.readInt();
+
+        if (encodedSize <= 0 || (juce::int64) encodedSize > in.getNumBytesRemaining())
+            continue;   // nothing was saved for this drum: it keeps its default
+
+        juce::MemoryBlock encoded ((size_t) encodedSize);
+        in.read (encoded.getData(), encodedSize);
+
+        juce::WavAudioFormat wav;
+
+        // The stream keeps its own copy, so it outlives this block.
+        if (auto* reader = wav.createReaderFor (new juce::MemoryInputStream (encoded, true), true))
+            loadSampleFromReader (std::unique_ptr<juce::AudioFormatReader> (reader), name, drumMidiMap[drum]);
+    }
+
+    getLongestSampleLengthInSamples();
+
+    // capturedInput is only sized once prepareToPlay has run, which may be
+    // after this, so the take waits in restoredInput until it has.
+    double takeRate = 0.0;
+    readAudioChunk (in, restoredInput, takeRate);
+    applyRestoredInput();
+
+    double loopRate = 0.0;
+    readAudioChunk (in, renderedDrumBuffer, loopRate);
+    renderedReadPos = 0;
+
+    inputProcessor.classifiedHits.clear();
+
+    const int numHits = juce::jlimit (0, InputProcessor::numHits, in.readInt());
+
+    for (int i = 0; i < numHits; ++i)
+    {
+        ClassifiedHit hit;
+        hit.hitIndex = in.readInt();
+        hit.onsetSample = in.readInt();
+        hit.type = (HitType) in.readInt();
+        hit.rms = in.readFloat();
+        hit.zcr = in.readFloat();
+        hit.durationSec = in.readFloat();
+
+        inputProcessor.classifiedHits.push_back (hit);
+    }
+
+    const int numStored = juce::jlimit (0, InputProcessor::numHits, in.readInt());
+
+    inputProcessor.storedHitsIndex = 0;
+
+    for (int i = 0; i < numStored; ++i)
+    {
+        auto& hit = inputProcessor.storedHits[(size_t) i];
+
+        hit.onsetSample = in.readInt();
+        const int length = in.readInt();
+        hit.type = (HitType) in.readInt();
+
+        if (length > 0 && (juce::int64) length * (juce::int64) sizeof (float) <= in.getNumBytesRemaining())
+        {
+            hit.buffer.setSize (1, length);
+            in.read (hit.buffer.getWritePointer (0), (int) ((size_t) length * sizeof (float)));
+            hit.hitLength = length;
+        }
+        else
+        {
+            hit.buffer.setSize (1, 0);
+            hit.hitLength = 0;
+        }
+
+        ++inputProcessor.storedHitsIndex;
+    }
 }
 
 //==============================================================================

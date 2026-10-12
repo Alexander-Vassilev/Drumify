@@ -67,6 +67,11 @@ namespace DrumifyLayout
     constexpr int aboutBodyX = 365, aboutBodyY = 190, aboutBodyW = 500;
     constexpr float aboutBodyFontHeight = 20.0f, aboutBodyLineGap = 5.0f;
 
+    // A line that opens with a short label and a colon is a heading, and is set
+    // in bold. The cap keeps a colon further into a sentence from qualifying -
+    // the longest real heading, "Lock BPM to host:", is seventeen characters.
+    constexpr int aboutHeadingMaxLength = 20;
+
     // How deep the band is in which the copy dissolves as it leaves the top.
     constexpr int aboutFadeHeight = 70;
 
@@ -386,11 +391,13 @@ public:
     void mouseDrag (const juce::MouseEvent&) override;
     void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
 
+    /** How far the sheet has been dragged, so a new editor can pick it up. */
+    float getScroll() const noexcept   { return scrollOffset; }
+    void setScroll (float newOffset);
+
 private:
     /** The column the copy is laid out in, down to the bottom of the canvas. */
     juce::Rectangle<int> bodyArea() const;
-
-    void setScroll (float newOffset);
 
     /** Renders the whole of the copy, with its shadow, into pageImage. */
     void buildPageImage();
@@ -469,6 +476,12 @@ private:
     */
     void applyToProcessor (Rerender level);
 
+    /** Keeps the processor's copy of the knob positions up to date, and seeds
+        them from it when a reopened editor builds this page again.
+    */
+    void saveState();
+    bool restoreState();
+
     const DrumifyAssets& assets;
     HackBrownAudioProcessor& processor;
 
@@ -541,6 +554,9 @@ private:
     void toggleInfoPage();
     void toggleSettingsPage();
     void goHome();
+
+    /** Records which page is open, so a reopened editor returns to it. */
+    void rememberOpenPage();
     void timerCallback() override;
     void toggleRecording();
     void loadDrumSample (DrumType);
