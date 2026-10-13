@@ -21,7 +21,7 @@ namespace BinaryData
     const int            Snare_wavSize = 23740;
 
     extern const char*   Parchment_png;
-    const int            Parchment_pngSize = 686795;
+    const int            Parchment_pngSize = 737213;
 
     extern const char*   Home_png;
     const int            Home_pngSize = 1471;
@@ -122,8 +122,8 @@ namespace BinaryData
     extern const char*   DrumkitUploadSnare_png;
     const int            DrumkitUploadSnare_pngSize = 16371;
 
-    extern const char*   MenuPlus_png;
-    const int            MenuPlus_pngSize = 4066;
+    extern const char*   MenuSettings_png;
+    const int            MenuSettings_pngSize = 2273;
 
     extern const char*   MenuQuestion_png;
     const int            MenuQuestion_pngSize = 8461;

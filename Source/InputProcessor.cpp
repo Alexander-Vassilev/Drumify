@@ -305,10 +305,19 @@ void InputProcessor::classifyStoredHits(double sampleRate)
     DBG(storedHitsIndex << " Hits classified");
     //storedHitsIndex = 1;
     
+    // Timed around the algorithm alone - feature extraction and the decision.
+    // The STFT dump and the extracted-hit write inside this loop are debug
+    // instrumentation and would swamp the figure if they were counted.
+    double totalClassificationMs = 0.0;
+
     for (int i = 0; i < storedHitsIndex; ++i)
     {
         const auto& hit = storedHits[i];
+
+        const auto featureStart = juce::Time::getHighResolutionTicks();
         const auto features = hitClassifier.extractFeatures(hit.buffer, hit.hitLength, sampleRate);
+        const auto featureMs = juce::Time::highResolutionTicksToSeconds(
+                                   juce::Time::getHighResolutionTicks() - featureStart) * 1000.0;
         
         DBG("STFT window count: " << features.stftData.size());
 
@@ -344,11 +353,26 @@ void InputProcessor::classifyStoredHits(double sampleRate)
         classified.onsetSample = hit.onsetSample;
         if (csvFile.is_open()) csvFile << currFileName;
         DBG("zcr: " << features.transientZcr);
+
+        const auto decisionStart = juce::Time::getHighResolutionTicks();
         classified.type = HitClassifier::classify(features, csvFile, classBias);
+        const auto decisionMs = juce::Time::highResolutionTicksToSeconds(
+                                    juce::Time::getHighResolutionTicks() - decisionStart) * 1000.0;
+
         classified.rms = features.rms;
         classified.zcr = features.zcr;
         classified.durationSec = features.durationSec;
         DBG(" Dur=" << classified.durationSec << "s");
+
+        const auto hitMs = featureMs + decisionMs;
+        totalClassificationMs += hitMs;
+
+        DBG("Hit #" << i << " (" << HitClassifier::toString(classified.type) << ") classified in "
+                    << juce::String(hitMs, 3) << " ms"
+                    << "  [features " << juce::String(featureMs, 3)
+                    << " ms, decision " << juce::String(decisionMs, 3) << " ms]");
+
+        juce::ignoreUnused(featureMs, decisionMs, hitMs);
 
         writeExtractedHit(hit, classified.type, i, currFileName, sampleRate);
 
@@ -361,7 +385,13 @@ void InputProcessor::classifyStoredHits(double sampleRate)
        //     << " Dur=" << classified.durationSec << "s");
     }
 
-    //DBG("---- Classification Complete ----");
+    if (storedHitsIndex > 0)
+        DBG("---- Classified " << storedHitsIndex << " hits in "
+                               << juce::String(totalClassificationMs, 3) << " ms, "
+                               << juce::String(totalClassificationMs / storedHitsIndex, 3)
+                               << " ms each ----");
+
+    juce::ignoreUnused(totalClassificationMs);
 }
 
 

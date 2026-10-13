@@ -53,7 +53,7 @@ static const char* const infoPanelText =
     "directly into your session.\n"
     "\n"
     "Menu: The question mark shows the info page (You happen to be looking at it), which you can "
-    "revisit at any time. The plus button shows advanced settings, which lets you change "
+    "revisit at any time. The cogwheel shows advanced settings, which lets you change "
     "Drumify's algorithm. The rotating arrows update the output, if you are happy with the input "
     "but replaced your samples or changed the settings. Here is an overview of all of the "
     "settings:\n"
@@ -281,7 +281,7 @@ DrumifyAssets::DrumifyAssets()
     title.load      (BinaryData::DrumifyTitle_png, BinaryData::DrumifyTitle_pngSize);
 
     menuUpdate.load   (BinaryData::Menuupdate_png,   BinaryData::Menuupdate_pngSize);
-    menuPlus.load     (BinaryData::MenuPlus_png,     BinaryData::MenuPlus_pngSize);
+    menuSettings.load (BinaryData::MenuSettings_png, BinaryData::MenuSettings_pngSize);
     menuQuestion.load (BinaryData::MenuQuestion_png, BinaryData::MenuQuestion_pngSize);
 
     kit.load   (BinaryData::DrumkitFullKit_png, BinaryData::DrumkitFullKit_pngSize);
@@ -1593,7 +1593,7 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
             stale.deleteFile();
 
     updateButton.onClick   = [this] { audioProcessor.reconstructLoopFromHits(); };
-    plusButton.onClick     = [this] { toggleSettingsPage(); };
+    settingsButton.onClick = [this] { toggleSettingsPage(); };
     questionButton.onClick = [this] { toggleInfoPage(); };
     homeButton.onClick     = [this] { goHome(); };
 
@@ -1603,7 +1603,7 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
     addAndMakeVisible (speakers);
     addAndMakeVisible (microphone);
     addAndMakeVisible (updateButton);
-    addAndMakeVisible (plusButton);
+    addAndMakeVisible (settingsButton);
     addAndMakeVisible (questionButton);
 
     // Added last so it draws over the controls as they pass each other.
@@ -1690,7 +1690,7 @@ void HackBrownAudioProcessorEditor::resized()
     const std::pair<AssetButton*, const AssetLayer*> icons[]
     {
         { &updateButton,   &assets.menuUpdate },
-        { &plusButton,     &assets.menuPlus },
+        { &settingsButton, &assets.menuSettings },
         { &questionButton, &assets.menuQuestion }
     };
 

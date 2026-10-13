@@ -1,0 +1,820 @@
+<title>Drumify</title>
+
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Courier+Prime:ital,wght@0,400;0,700;1,400&display=swap">
+
+<style>
+/* Layout: one reading column with a sticky download rail at desktop width;
+   the rail drops in above the demos when the page narrows. The whole palette
+   is lifted off the plugin itself - crumpled pink paper, graphite ink, the
+   dusty terracotta of its panel edges. */
+/* Single theme on purpose: the background is a video of pale pink grid paper
+   and the type is the plugin's own dark graphite, so there is no dark variant
+   to design - the page commits to the one look. */
+:root {
+  --paper:      #f3f1ee;          /* shows until the video has decoded */
+  --surface:    #fcfaf8;
+  --ink:        #3d3b38;          /* the plugin's caption ink */
+  --ink-soft:   #6b6460;
+  --ink-head-a: #26251f;          /* heading gradient: near black at the cap... */
+  --ink-head-b: #5a574f;          /* ...to the plugin's dark grey at the baseline */
+  --accent:     #a85740;
+  --accent-dim: #cf8f80;
+  --rule:       #ddd6d2;
+  --shadow:     rgba(63, 48, 44, 0.16);
+  --silhouette: rgba(38, 37, 31, 0.20);   /* the offset copy behind every word */
+
+  --display: "Courier New", "Courier Prime", Courier, monospace;
+  --body:    "Courier New", "Courier Prime", Courier, monospace;
+
+  color-scheme: light;
+}
+
+/* Served raw from this folder as well as wrapped by the artifact host, so the
+   page carries its own reset rather than relying on one being supplied. */
+html, body { margin: 0; padding: 0; }
+
+/* The page is set in Courier, which reads small for its size; this lifts every
+   rem on the page at once rather than tuning each rule. */
+:root { font-size: 17.5px; }
+img, video { max-width: 100%; }
+
+* { box-sizing: border-box; }
+
+/* The page is printed on a sheet of paper, and the paper is moving. Fixed
+   rather than attached to the body, and taller than the viewport so it can
+   drift as the page scrolls without ever showing an edge. */
+.sheet {
+  position: fixed;
+  inset: -14% 0;
+  z-index: -1;
+  background: var(--paper);
+  overflow: hidden;
+  will-change: transform;
+}
+
+.sheet video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  text-shadow: 1.5px 1.5px 0 var(--silhouette);
+  font-family: var(--body);
+  font-size: 1.06rem;
+  line-height: 1.74;
+  -webkit-font-smoothing: antialiased;
+}
+
+.page {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding-inline: 20px;
+  padding-block: clamp(36px, 7vw, 76px) clamp(36px, 5vw, 64px);
+  display: grid;
+  gap: clamp(44px, 6vw, 76px);
+}
+
+/* ---------- section bar ---------- */
+
+.topbar {
+  position: sticky;
+  top: env(safe-area-inset-top, 0px);
+  z-index: 10;
+  padding: 17px 20px;
+  /* The tints are taken off the background animation, washed out far enough
+     that the blocks still read against them. */
+  background: linear-gradient(95deg,
+    #fbf6e2 0%, #eff7ee 27%, #e9eff9 54%, #f8ebf6 79%, #fdf3e9 100%);
+  border-bottom: 1px solid var(--rule);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.65) inset,
+              0 8px 20px -14px rgba(63, 48, 44, 0.45);
+}
+
+.topbar-inner {
+  max-width: 1180px;
+  margin: 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+}
+
+.topbar a {
+  font-family: var(--display);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  text-decoration: none;
+  color: var(--ink);
+  text-shadow: none;
+  background: rgba(255, 253, 251, 0.9);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 9px 17px 8px;
+  box-shadow: 2px 2px 0 var(--silhouette);
+  transition: transform 0.12s ease, box-shadow 0.12s ease,
+              background-color 0.12s ease, color 0.12s ease;
+}
+
+.topbar a:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 3px 3px 0 var(--silhouette);
+  color: var(--accent);
+}
+
+/* Pressed, like a key going down rather than a link changing colour. */
+.topbar a:active {
+  transform: translate(1px, 1px);
+  box-shadow: 1px 1px 0 var(--silhouette);
+}
+
+.topbar a[aria-current="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--surface);
+}
+
+/* Section headings clear the bar when jumped to. */
+section[id] { scroll-margin-top: 88px; }
+
+@media (prefers-reduced-motion: no-preference) {
+  html { scroll-behavior: smooth; }
+}
+
+@media (max-width: 460px) {
+  .topbar { padding: 12px 14px; }
+  .topbar-inner { gap: 8px; }
+  .topbar a { font-size: 0.7rem; padding: 8px 11px 7px; letter-spacing: 0.1em; }
+}
+
+h1, h2, h3 {
+  font-family: var(--display);
+  font-weight: 700;
+  text-wrap: balance;
+  margin: 0;
+  /* The plugin's lettering darkens from cap to baseline; the fallback colour
+     is what shows if a browser cannot clip a background to the glyphs. */
+  color: var(--ink-head-a);
+  background: linear-gradient(180deg, var(--ink-head-a) 0%, var(--ink-head-b) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+p { margin: 0; }
+
+a { color: var(--accent); text-underline-offset: 3px; }
+a:focus-visible, button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+.eyebrow {
+  font-family: var(--display);
+  font-size: 0.78rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 14px;
+}
+
+/* ---------- hero ---------- */
+
+.hero {
+  display: grid;
+  gap: clamp(10px, 1.6vw, 18px);
+  justify-items: center;
+  text-align: center;
+  padding-block: clamp(8px, 3vw, 34px) 0;
+}
+
+.hero h1 {
+  font-size: clamp(2.1rem, 6.6vw, 4.1rem);
+  line-height: 1.08;
+  letter-spacing: -0.01em;
+  font-weight: 400;
+  text-shadow: 5px 5px 0 var(--silhouette);
+}
+
+/* Only the name is set in bold - "Welcome to" is the quiet half. */
+.hero h1 strong { font-weight: 700; }
+
+.shot {
+  margin: 0;
+  display: grid;
+  gap: 12px;
+  width: calc(70.7% + clamp(0px, 6.363vw, 134.3px));
+  max-width: calc(70.7vw - 28.28px);
+  perspective: 1600px;   /* gives the spin below some depth */
+}
+
+.shot img {
+  display: block;
+  width: 100%;
+  height: auto;   /* without this the markup's height attribute wins over the ratio */
+
+  /* The artwork carries 541 transparent rows above the plugin and only 161
+     below, which shows up as a gap under the heading. The box is set to the
+     height the content actually needs (2651 x 1568) and the image is anchored
+     to its foot, so the empty band at the top is cropped away. */
+  aspect-ratio: 2651 / 1568;
+  object-fit: cover;
+  object-position: center bottom;
+
+  /* No radius and no shadow here: both are already part of the image. */
+
+  cursor: pointer;
+  transform-origin: center;
+  transition: transform 0.28s cubic-bezier(0.22, 0.61, 0.36, 1), filter 0.28s ease;
+}
+
+/* Lifts and lightens under the pointer, the way the plugin's own buttons do. */
+.shot img:hover { transform: scale(1.025); filter: brightness(1.06); }
+.shot img:active { transform: scale(1.005); filter: brightness(1.1); }
+
+/* One turn about the vertical axis. The animation's transform wins over the
+   hover rule for as long as it runs. */
+.shot img.spinning,
+.shot img.spinning:hover,
+.shot img.spinning:active {
+  animation: plugin-spin 0.95s cubic-bezier(0.5, 0.02, 0.3, 1);
+  filter: brightness(1.04);
+}
+
+@keyframes plugin-spin {
+  from { transform: perspective(1600px) rotateY(0deg) scale(1.025); }
+  to   { transform: perspective(1600px) rotateY(360deg) scale(1.025); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shot img { transition: filter 0.2s ease; }
+  .shot img:hover { transform: none; }
+  .shot img.spinning { animation: none; }
+}
+
+.shot figcaption {
+  font-family: var(--display);
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+}
+
+/* ---------- two-column frame ---------- */
+
+/* Everything under the hero lifts off the moving background and onto plain
+   white paper, so nothing has to be read against the grid. */
+.paper {
+  background: #fdfcfb url("paper-light.jpg") center / cover;
+  border-top: 1px solid var(--rule);
+  padding-inline: 20px;
+  padding-block: clamp(34px, 5vw, 62px) clamp(40px, 6vw, 76px);
+  /* Edge to edge, so the shadow only has a top edge to cast from. */
+  box-shadow: 0 -14px 34px -22px rgba(63, 48, 44, 0.4);
+}
+
+.paper-inner {
+  max-width: 1180px;
+  margin: 0 auto;
+  display: grid;
+  gap: clamp(40px, 5vw, 64px);
+}
+
+.frame {
+  display: grid;
+  gap: clamp(32px, 5vw, 56px);
+  align-items: start;
+}
+
+@media (min-width: 1000px) {
+  .frame { grid-template-columns: minmax(0, 1fr) 296px; }
+  .rail { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 94px); }
+}
+
+.column { display: grid; gap: clamp(44px, 6vw, 72px); min-width: 0; }
+
+/* ---------- download rail ---------- */
+
+.rail {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: 26px 24px 24px;
+  display: grid;
+  gap: 16px;
+  box-shadow: 0 14px 34px -26px var(--shadow);
+}
+
+.price {
+  font-family: var(--display);
+  font-size: 3.5rem;
+  font-weight: 700;
+  line-height: 0.9;
+  color: var(--accent);
+  text-shadow: 4px 4px 0 var(--silhouette);
+  letter-spacing: -0.03em;
+}
+
+.price span {
+  display: block;
+  font-size: 0.78rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  margin-top: 12px;
+  font-weight: 400;
+}
+
+.get {
+  display: block;
+  text-align: center;
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 1.05rem;
+  letter-spacing: 0.04em;
+  padding: 14px 18px;
+  border-radius: 4px;
+  background: var(--accent);
+  color: var(--surface);
+  text-shadow: none;
+  text-decoration: none;
+  transition: transform 0.12s ease, filter 0.12s ease;
+}
+
+.get:hover { filter: brightness(1.08); transform: translateY(-1px); }
+
+.spec {
+  font-family: var(--display);
+  font-size: 0.82rem;
+  line-height: 1.85;
+  color: var(--ink-soft);
+  border-top: 1px solid var(--rule);
+  padding-top: 14px;
+  display: grid;
+  gap: 2px;
+}
+
+.spec div { display: flex; justify-content: space-between; gap: 14px; }
+.spec b { font-weight: 700; color: var(--ink); }
+
+.rail .note { font-size: 0.78rem; color: var(--ink-soft); line-height: 1.6; }
+
+/* ---------- sections ---------- */
+
+section { display: grid; gap: 20px; }
+
+section h2 {
+  font-size: clamp(1.45rem, 3vw, 2rem);
+  letter-spacing: -0.01em;
+  text-shadow: 3px 3px 0 var(--silhouette);
+}
+
+section p { max-width: 58ch; }
+
+/* The pitch sits directly under the player and lines up with it, so it takes
+   the column's full width rather than the usual reading measure. */
+#pitch p { max-width: none; }
+
+.stack { display: grid; gap: 16px; }
+
+/* ---------- video ---------- */
+
+.video {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  max-width: 100%;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--surface);
+  box-shadow: 0 2px 10px var(--shadow), 0 20px 56px -16px var(--shadow);
+}
+
+.video iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+
+.video-link { font-family: var(--display); font-size: 0.82rem; color: var(--ink-soft); }
+
+/* ---------- demos ---------- */
+
+.demo-head,
+.demo-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.demo-head {
+  font-family: var(--display);
+  font-size: 0.76rem;
+  letter-spacing: 0.17em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 8px;
+}
+
+.demos { display: grid; gap: 22px; }
+
+.cell {
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  padding: 14px 15px 15px;
+  display: grid;
+  gap: 10px;
+}
+
+.cell.after { border-color: var(--accent-dim); }
+
+.cell .name {
+  font-family: var(--display);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.cell .what { font-size: 0.78rem; color: var(--ink-soft); line-height: 1.5; }
+
+.cell audio { width: 100%; height: 34px; }
+
+@media (max-width: 560px) {
+  .demo-head { display: none; }
+  .demo-row { grid-template-columns: 1fr; gap: 10px; }
+  .demo-row + .demo-row { border-top: 1px solid var(--rule); padding-top: 22px; }
+}
+
+/* ---------- technical ---------- */
+
+.tech-grid {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+}
+
+.step {
+  min-width: 0;
+  border-top: 2px solid var(--accent-dim);
+  padding-top: 12px;
+  display: grid;
+  gap: 6px;
+  align-content: start;
+}
+
+.step h3 { font-size: 0.95rem; }
+.step p { font-size: 0.9rem; color: var(--ink-soft); line-height: 1.6; }
+
+.tech-note {
+  font-family: var(--display);
+  font-size: 0.86rem;
+  color: var(--ink-soft);
+  border-left: 2px solid var(--rule);
+  padding-left: 16px;
+  max-width: 62ch;
+}
+
+.placeholder {
+  font-family: var(--display);
+  font-size: 0.78rem;
+  color: var(--accent);
+}
+
+footer {
+  border-top: 1px solid var(--rule);
+  padding-top: 18px;
+  text-align: center;
+  font-family: var(--display);
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; }
+}
+</style>
+
+<div class="sheet" aria-hidden="true">
+  <video src="site-bg.mp4" autoplay muted loop playsinline preload="auto" disablepictureinpicture></video>
+</div>
+
+<nav class="topbar" aria-label="Sections">
+  <div class="topbar-inner">
+    <a href="#watch">Demo</a>
+    <a href="#pitch">Description</a>
+    <a href="#demos">Examples</a>
+    <a href="#tech">How it works</a>
+  </div>
+</nav>
+
+<div class="page">
+
+  <header class="hero">
+    <h1>Welcome to <strong>Drumify</strong></h1>
+    <figure class="shot">
+      <img src="drumify-ui.png" width="2651" height="2109"
+           alt="The Drumify plugin window: a watercolour drum kit on the left, a microphone in the centre, speakers and save buttons on the right, all on crumpled pink paper.">
+    </figure>
+  </header>
+
+</div>
+
+<div class="paper">
+  <div class="paper-inner">
+
+  <div class="frame">
+
+    <div class="column">
+
+      <section id="watch">
+        <h2>Watch the demo!</h2>
+        <div class="video">
+          <iframe src="https://www.youtube-nocookie.com/embed/O0LJVFxJjhM"
+                  title="Drumify demo"
+                  loading="lazy"
+                  referrerpolicy="strict-origin-when-cross-origin"
+                  allow="accelerometer; encrypted-media; gyroscope; picture-in-picture"
+                  allowfullscreen></iframe>
+        </div>
+        <p class="video-link">
+          No player above? <a href="https://youtu.be/O0LJVFxJjhM" target="_blank" rel="noopener">Watch it on YouTube</a>.
+        </p>
+      </section>
+
+      <section id="pitch">
+        <h2>Your mouth is the most intuitive instrument you own</h2>
+        <div class="stack">
+          <p>
+            You have a beat in your head: it is glorious, it is perfect, and so, you get to work. You 
+            draw it into your DAW one hit at a time, or hunt through a sample pack for a loop that nearly fits, but
+            the sounds do not quite match your emotional intent. You probably got somewhere, maybe all of the way there,
+            but it was slower and more tedious than it should have been...
+          </p>
+          <p>
+            Beatbox it instead! Drumify listens to your input, finds every hit, decides the drum type, 
+            and rebuilds the groove with the samples you chose. Your timing, your dynamics, your drums. 
+            Want to change the samples of an existing loop instead? Drop in any sample you want and watch
+            it get transformed with your drums.
+          </p>
+          <p>
+            When it sounds right, drag the result straight into your session as audio or MIDI.
+          </p>
+          <p>
+            <strong>Drumify is free, and its algorithms use no AI.</strong> No neural network, no
+            model to download, no account, no stealing your data. It uses deterministic digital signal
+            processing methods, making it light on your CPU and 100% interpretable.
+          </p>
+        </div>
+      </section>
+
+      <section id="demos">
+        <h2>Before and after</h2>
+        <p>
+          The left column is input audio. The right is the same loop with hits
+          replaced: Same timing, same feel, different drums.
+        </p>
+
+        <div class="demos">
+          <div class="demo-head">
+            <div>User Input</div>
+            <div>Drumify Output</div>
+          </div>
+
+          <div class="demo-row">
+            <div class="cell">
+              <div class="name">Boom bap</div>
+              <div class="what">Beatboxed into a laptop mic</div>
+              <audio controls preload="none" src="demos/boom-bap-original.mp3"></audio>
+            </div>
+            <div class="cell after">
+              <div class="name">Boom bap</div>
+              <div class="what">Vinyl kit, quantised to 1/16</div>
+              <audio controls preload="none" src="demos/boom-bap-drumify.mp3"></audio>
+            </div>
+          </div>
+
+          <div class="demo-row">
+            <div class="cell">
+              <div class="name">Four on the floor</div>
+              <div class="what">Beatboxed into a laptop mic</div>
+              <audio controls preload="none" src="demos/four-floor-original.mp3"></audio>
+            </div>
+            <div class="cell after">
+              <div class="name">Four on the floor</div>
+              <div class="what">909 samples, locked to host tempo</div>
+              <audio controls preload="none" src="demos/four-floor-drumify.mp3"></audio>
+            </div>
+          </div>
+
+          <div class="demo-row">
+            <div class="cell">
+              <div class="name">Breakbeat</div>
+              <div class="what">An imported loop, not a voice</div>
+              <audio controls preload="none" src="demos/breakbeat-original.mp3"></audio>
+            </div>
+            <div class="cell after">
+              <div class="name">Breakbeat</div>
+              <div class="what">Kick and snare replaced, hats left alone</div>
+              <audio controls preload="none" src="demos/breakbeat-drumify.mp3"></audio>
+            </div>
+          </div>
+
+          <div class="demo-row">
+            <div class="cell">
+              <div class="name">Half time</div>
+              <div class="what">Beatboxed into a laptop mic</div>
+              <audio controls preload="none" src="demos/half-time-original.mp3"></audio>
+            </div>
+            <div class="cell after">
+              <div class="name">Half time</div>
+              <div class="what">Acoustic kit, stretched to 0.8x</div>
+              <audio controls preload="none" src="demos/half-time-drumify.mp3"></audio>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="tech">
+        <h2>How it works</h2>
+        <p>
+          Four stages, all of them 100% explainable and handcrafted. No black boxes here!
+        </p>
+
+        <div class="tech-grid">
+          <div class="step">
+            <h3>Where are the hits?</h3>
+            <p>
+              A 2048-point short-time Fourier transform feeds a complex-domain detection
+              function. A spiking statistical trigger marks the moment that a transient begins.
+            </p>
+          </div>
+          <div class="step">
+            <h3>Let's learn about the hits!</h3>
+            <p>
+              Several manually developed features, measuring energy trends, spectral centroid, and more
+              for each input drum.
+            </p>
+          </div>
+          <div class="step">
+            <h3>So what are they?</h3>
+            <p>
+              A Gaussian naive Bayes classifier weighs the features against measured
+              distributions for an ideal kick, snare and hat. Pick the one it matches best!
+            </p>
+          </div>
+          <div class="step">
+            <h3>Rebuild the loop!</h3>
+            <p>
+              Your samples are placed at the original onsets, quantised if you want, with
+              unreplaced hits spliced back in and the whole loop normalised.
+            </p>
+          </div>
+        </div>
+
+        <p class="tech-note">
+          Classification runs offline, after the take, so the analysis is free to be thorough;
+          detection runs live on the audio thread, allocation-free, while you play.
+        </p>
+      </section>
+
+    </div>
+
+    <aside class="rail">
+      <div class="price">Free<span>No account, no trial</span></div>
+      <a class="get" href="drumify-placeholder.txt">Download Drumify</a>
+      <div class="spec">
+        <div><span>Formats</span><b>VST3 &middot; AU</b></div>
+        <div><span>Standalone</span><b>Yes</b></div>
+        <div><span>Platform</span><b>macOS</b></div>
+        <div><span>Price</span><b>&pound;0</b></div>
+      </div>
+    </aside>
+
+  </div>
+
+  <footer>Drumify &mdash; built in JUCE by Alexander Vassilev.</footer>
+
+  </div>
+</div>
+
+<script>
+// The sheet drifts up as the page scrolls down, and back again on the way up.
+// It eases towards the scroll position rather than tracking it exactly, which
+// is what makes the movement read as slow rather than stuck to the content.
+// A click sends the plugin through one horizontal turn. The class comes off at
+// the end so a second click starts a fresh spin rather than doing nothing.
+(function () {
+  var plugin = document.querySelector('.shot img');
+
+  if (!plugin) return;
+
+  plugin.addEventListener('click', function () {
+    if (plugin.classList.contains('spinning')) return;
+    plugin.classList.add('spinning');
+  });
+
+  plugin.addEventListener('animationend', function () {
+    plugin.classList.remove('spinning');
+  });
+})();
+
+// Light the block for whichever section is currently under the bar.
+(function () {
+  var links = Array.prototype.slice.call(document.querySelectorAll('.topbar a'));
+
+  if (!links.length || !('IntersectionObserver' in window)) return;
+
+  var sections = links
+    .map(function (link) { return document.querySelector(link.getAttribute('href')); })
+    .filter(Boolean);
+
+  var seen = {};
+
+  var observer = new IntersectionObserver(function (entries) {
+    entries.forEach(function (entry) { seen[entry.target.id] = entry.isIntersecting; });
+
+    // The topmost section still in view wins, so the bar never flickers between
+    // two of them while one scrolls out.
+    var current = null;
+
+    sections.forEach(function (section) {
+      if (current === null && seen[section.id]) current = section.id;
+    });
+
+    links.forEach(function (link) {
+      var active = current !== null && link.getAttribute('href') === '#' + current;
+      if (active) link.setAttribute('aria-current', 'true');
+      else link.removeAttribute('aria-current');
+    });
+  }, { rootMargin: '-88px 0px -55% 0px' });
+
+  sections.forEach(function (section) { observer.observe(section); });
+})();
+
+(function () {
+  var video = document.querySelector('.sheet video');
+
+  if (video) {
+    var calm = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+    var resume = function () {
+      if (calm.matches) { video.pause(); return; }
+      var attempt = video.play();
+      if (attempt && attempt.catch) attempt.catch(function () {});
+    };
+
+    video.addEventListener('loadeddata', resume);
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden) resume();
+    });
+    calm.addEventListener('change', resume);
+    resume();
+  }
+})();
+
+(function () {
+  var sheet = document.querySelector('.sheet');
+
+  if (!sheet) return;
+
+  var still = window.matchMedia('(prefers-reduced-motion: reduce)');
+  var target = 0, current = 0, frame = 0;
+
+  function measure() {
+    if (still.matches) { target = 0; return; }
+
+    var scrollable = Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
+    var progress = Math.min(1, Math.max(0, window.scrollY / scrollable));
+
+    // Kept inside the sheet's own overhang, so no edge can come into view.
+    target = -progress * window.innerHeight * 0.14;
+  }
+
+  function step() {
+    current += (target - current) * 0.07;
+
+    if (Math.abs(target - current) < 0.15) {
+      current = target;
+      frame = 0;
+    } else {
+      frame = requestAnimationFrame(step);
+    }
+
+    sheet.style.transform = 'translate3d(0,' + current.toFixed(2) + 'px,0)';
+  }
+
+  function onScroll() {
+    measure();
+    if (!frame) frame = requestAnimationFrame(step);
+  }
+
+  window.addEventListener('scroll', onScroll, { passive: true });
+  window.addEventListener('resize', onScroll);
+  still.addEventListener('change', onScroll);
+
+  measure();
+  step();
+})();
+</script>

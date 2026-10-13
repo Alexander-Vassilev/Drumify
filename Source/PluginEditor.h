@@ -133,7 +133,7 @@ struct DrumifyAssets
     DrumifyAssets();
 
     AssetLayer background, title;
-    AssetLayer menuUpdate, menuPlus, menuQuestion;
+    AssetLayer menuUpdate, menuSettings, menuQuestion;
 
     AssetLayer kit, kick, snare, hats;
     AssetLayer labelUploadDrumhits, labelUploadKick, labelUploadSnare, labelUploadHat;
@@ -587,7 +587,7 @@ private:
 
     AssetButton updateButton   { assets.menuUpdate,   "Rebuild Loop",
                                  "Analyse the last take again and rebuild the loop" };
-    AssetButton plusButton     { assets.menuPlus,     "Settings",
+    AssetButton settingsButton { assets.menuSettings, "Settings",
                                  "Settings menu..." };
     AssetButton questionButton { assets.menuQuestion, "About",
                                  "About Drumify and how to use it!" };
