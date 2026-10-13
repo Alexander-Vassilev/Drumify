@@ -21,7 +21,7 @@
   --accent:     #a85740;
   --accent-dim: #cf8f80;
   --rule:       #ddd6d2;
-  --demos-bg:   #e3f3ec;          /* the band behind "Before and after" */
+  --demos-bg:   #e3f3ec;          /* "Before and after" band when motion is reduced */
   --shadow:     rgba(63, 48, 44, 0.16);
   --silhouette: rgba(38, 37, 31, 0.20);   /* the offset copy behind every word */
 
@@ -439,6 +439,24 @@ section p { max-width: 58ch; }
   border-block: 1px solid var(--rule);
   box-shadow: 0 -14px 34px -22px rgba(63, 48, 44, 0.4),
               0 14px 34px -22px rgba(63, 48, 44, 0.4);
+}
+
+/* The band drifts through a rainbow of pastels. Each stop is one colour; add,
+   remove or change stops freely, as long as 0% and 100% match so the loop has
+   no seam. The duration is the time for one full trip round the rainbow.
+   Visitors who ask for reduced motion get the still --demos-bg instead. */
+@keyframes demos-rainbow {
+  0%   { background-color: #fbe0e4; }   /* pink */
+  17%  { background-color: #fde8d4; }   /* peach */
+  33%  { background-color: #fbf5d2; }   /* butter */
+  50%  { background-color: #e1f4e5; }   /* mint */
+  67%  { background-color: #dff0fa; }   /* sky */
+  83%  { background-color: #e9e2f8; }   /* lavender */
+  100% { background-color: #fbe0e4; }   /* pink again */
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  #demos::before { animation: demos-rainbow 30s linear infinite; }
 }
 
 .cell {
