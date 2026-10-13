@@ -21,6 +21,7 @@
   --accent:     #a85740;
   --accent-dim: #cf8f80;
   --rule:       #ddd6d2;
+  --demos-bg:   #e3f3ec;          /* the band behind "Before and after" */
   --shadow:     rgba(63, 48, 44, 0.16);
   --silhouette: rgba(38, 37, 31, 0.20);   /* the offset copy behind every word */
 
@@ -420,7 +421,7 @@ section p { max-width: 58ch; }
 
 .demos { display: grid; gap: 22px; }
 
-/* The demos leave the paper for a band of pastel waves, cut as hard as the
+/* The demos leave the paper for a band of solid colour, cut as hard as the
    paper's own top edge. The band sits behind the section rather than wrapping
    it, so the section stays in the column and the rail stays sticky beside it.
    It reaches back from the column to the window's left edge and runs a full
@@ -434,7 +435,7 @@ section p { max-width: 58ch; }
   inset-block: calc(-1 * clamp(22px, 3vw, 36px));
   left: calc(-20px - max(0px, (100vw - 1220px) / 2));
   width: 100vw;
-  background: #eef8f4 url("pastel-waves.jpg") center / cover;
+  background: var(--demos-bg);
   border-block: 1px solid var(--rule);
   box-shadow: 0 -14px 34px -22px rgba(63, 48, 44, 0.4),
               0 14px 34px -22px rgba(63, 48, 44, 0.4);
