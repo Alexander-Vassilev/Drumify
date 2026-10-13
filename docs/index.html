@@ -441,22 +441,31 @@ section p { max-width: 58ch; }
               0 14px 34px -22px rgba(63, 48, 44, 0.4);
 }
 
-/* The band drifts through a rainbow of pastels. Each stop is one colour; add,
-   remove or change stops freely, as long as 0% and 100% match so the loop has
-   no seam. The duration is the time for one full trip round the rainbow.
+/* The band is a rainbow of pastels sliding sideways. Each stop in the gradient
+   is one colour; add, remove or change stops freely, as long as the first and
+   last match so the repeat has no seam. The gradient is drawn twice the band's
+   width, so about half the rainbow shows at once, and the animation slides it
+   one full width along; the duration is the time for one full trip round.
    Visitors who ask for reduced motion get the still --demos-bg instead. */
 @keyframes demos-rainbow {
-  0%   { background-color: #fbe0e4; }   /* pink */
-  17%  { background-color: #fde8d4; }   /* peach */
-  33%  { background-color: #fbf5d2; }   /* butter */
-  50%  { background-color: #e1f4e5; }   /* mint */
-  67%  { background-color: #dff0fa; }   /* sky */
-  83%  { background-color: #e9e2f8; }   /* lavender */
-  100% { background-color: #fbe0e4; }   /* pink again */
+  from { background-position: 0% 0; }
+  to   { background-position: 200% 0; }
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  #demos::before { animation: demos-rainbow 30s linear infinite; }
+  #demos::before {
+    background-image: linear-gradient(90deg,
+      #fbe0e4,    /* pink */
+      #fde8d4,    /* peach */
+      #fbf5d2,    /* butter */
+      #e1f4e5,    /* mint */
+      #dff0fa,    /* sky */
+      #e9e2f8,    /* lavender */
+      #fbe0e4);   /* pink again */
+    background-size: 200% 100%;
+    background-repeat: repeat-x;
+    animation: demos-rainbow 12s linear infinite;
+  }
 }
 
 .cell {
