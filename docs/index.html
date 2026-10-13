@@ -275,6 +275,7 @@ a:focus-visible, button:focus-visible {
   padding-block: clamp(34px, 5vw, 62px) clamp(40px, 6vw, 76px);
   /* Edge to edge, so the shadow only has a top edge to cast from. */
   box-shadow: 0 -14px 34px -22px rgba(63, 48, 44, 0.4);
+  overflow-x: clip;
 }
 
 .paper-inner {
@@ -418,6 +419,26 @@ section p { max-width: 58ch; }
 }
 
 .demos { display: grid; gap: 22px; }
+
+/* The demos leave the paper for a band of pastel waves, cut as hard as the
+   paper's own top edge. The band sits behind the section rather than wrapping
+   it, so the section stays in the column and the rail stays sticky beside it.
+   It reaches back from the column to the window's left edge and runs a full
+   window wide; .paper clips whatever a scrollbar pushes past the right edge. */
+#demos { position: relative; isolation: isolate; }
+
+#demos::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset-block: calc(-1 * clamp(22px, 3vw, 36px));
+  left: calc(-20px - max(0px, (100vw - 1220px) / 2));
+  width: 100vw;
+  background: #eef8f4 url("pastel-waves.jpg") center / cover;
+  border-block: 1px solid var(--rule);
+  box-shadow: 0 -14px 34px -22px rgba(63, 48, 44, 0.4),
+              0 14px 34px -22px rgba(63, 48, 44, 0.4);
+}
 
 .cell {
   min-width: 0;
