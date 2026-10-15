@@ -18,8 +18,14 @@
   --ink-soft:   #6b6460;
   --ink-head-a: #26251f;          /* heading gradient: near black at the cap... */
   --ink-head-b: #5a574f;          /* ...to the plugin's dark grey at the baseline */
-  --accent:     #a85740;
-  --accent-dim: #cf8f80;
+  /* The mahogany the whole page is keyed to. Held as channels so the washes
+     below can be mixed from the same numbers - change these two lines and
+     every terracotta mark on the page follows. */
+  --accent-rgb:     237 92 124;
+  --accent-dim-rgb: 237 92 124;
+  --accent:     rgb(var(--accent-rgb));
+  --accent-dim: rgb(var(--accent-dim-rgb));
+  --accent-wash: rgb(var(--accent-dim-rgb) / 0.14);   /* hover fill on the clip buttons */
   --rule:       #ddd6d2;
   --demos-bg:   #e3f3ec;          /* "Before and after" band when motion is reduced */
   --shadow:     rgba(63, 48, 44, 0.16);
@@ -557,7 +563,7 @@ section p { max-width: 58ch; }
 }
 
 .cell .play:hover,
-.cell .play:focus-visible { background: rgba(207, 143, 128, 0.14); }
+.cell .play:focus-visible { background: var(--accent-wash); }
 
 .cell .play svg { display: block; width: 13px; height: 13px; fill: currentColor; }
 
