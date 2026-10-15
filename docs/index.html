@@ -270,7 +270,15 @@ a:focus-visible, button:focus-visible {
 /* Everything under the hero lifts off the moving background and onto plain
    white paper, so nothing has to be read against the grid. */
 .paper {
-  background: #fdfcfb url("paper-light.jpg") center / cover;
+  /* Scaled to the panel's width and tiled downwards, never "cover": cover is
+     sized to the element, so opening a drawer makes the panel taller and the
+     texture rescales and re-centres under it - which reads as the paper
+     sliding. Width-based sizing leaves it still. */
+  background-color: #fdfcfb;
+  background-image: url("paper-light.jpg");
+  background-position: center top;
+  background-size: 100% auto;
+  background-repeat: repeat;
   border-top: 1px solid var(--rule);
   padding-inline: 20px;
   padding-block: clamp(34px, 5vw, 62px) clamp(40px, 6vw, 76px);
@@ -400,6 +408,46 @@ section p { max-width: 58ch; }
 
 .video-link { font-family: var(--display); font-size: 0.82rem; color: var(--ink-soft); }
 
+/* Round portraits the copy wraps around; shape-outside makes the text follow
+   the circle rather than its bounding box. */
+.portrait {
+  width: clamp(172px, 25vw, 250px);
+  height: auto;   /* else the markup's height attribute wins over the ratio */
+  aspect-ratio: 1;
+  border-radius: 50%;
+  shape-outside: circle(50%);
+  border: 3px solid var(--surface);
+  box-shadow: 3px 3px 0 var(--silhouette);
+  object-fit: cover;
+}
+
+.portrait.right { float: right; shape-margin: 14px; margin: 2px 0 10px 22px; }
+.portrait.left  { float: left;  shape-margin: 14px; margin: 2px 22px 10px 0; }
+
+/* The beatbox portrait sits beside its paragraph rather than inside it, so
+   every line of the copy starts on the same vertical edge instead of curving
+   around the circle. */
+.pitch-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 22px;
+}
+
+.pitch-row .portrait.left { float: none; flex: none; margin: 2px 0 0; }
+.pitch-row p { margin: 0; min-width: 0; }
+
+@media (max-width: 560px) {
+  .portrait.right,
+  .portrait.left {
+    float: none;
+    display: block;
+    margin: 0 auto 14px;
+  }
+
+  .pitch-row { display: block; }
+  .pitch-row .portrait.left { margin: 0 auto 14px; }
+}
+
 /* ---------- demos ---------- */
 
 .demo-head,
@@ -468,17 +516,18 @@ section p { max-width: 58ch; }
   }
 }
 
+/* No frame around either column - both sides are the same plain white card,
+   marked only by the terracotta rule running down their left edge. */
 .cell {
   min-width: 0;
   background: var(--surface);
-  border: 1px solid var(--rule);
+  border: 0;
+  border-left: 3px solid var(--accent-dim);
   border-radius: 5px;
   padding: 14px 15px 15px;
   display: grid;
   gap: 10px;
 }
-
-.cell.after { border-color: var(--accent-dim); }
 
 .cell .name {
   font-family: var(--display);
@@ -488,7 +537,35 @@ section p { max-width: 58ch; }
 
 .cell .what { font-size: 0.78rem; color: var(--ink-soft); line-height: 1.5; }
 
-.cell audio { width: 100%; height: 34px; }
+/* The browser's own audio widget carries a grey bar, a timeline and a volume
+   slider that fight the paper look, so each clip gets one button instead. */
+.cell .play {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px 7px 11px;
+  font: inherit;
+  font-family: var(--display);
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid var(--accent-dim);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.cell .play:hover,
+.cell .play:focus-visible { background: rgba(207, 143, 128, 0.14); }
+
+.cell .play svg { display: block; width: 13px; height: 13px; fill: currentColor; }
+
+/* The two glyphs live in the same button; the playing state swaps which one
+   is shown so the button never changes width mid-clip. */
+.cell .play .pause-icon,
+.cell .play.playing .play-icon { display: none; }
+.cell .play.playing .pause-icon { display: block; }
 
 @media (max-width: 560px) {
   .demo-head { display: none; }
@@ -498,23 +575,68 @@ section p { max-width: 58ch; }
 
 /* ---------- technical ---------- */
 
-.tech-grid {
-  display: grid;
-  gap: 18px;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-}
+/* Each stage is its own drawer, stacked so every one runs the full width of
+   the column - from the section's left edge to the download rail. */
+.tech-steps { display: grid; gap: 10px; }
 
 .step {
   min-width: 0;
-  border-top: 2px solid var(--accent-dim);
-  padding-top: 12px;
-  display: grid;
-  gap: 6px;
-  align-content: start;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--accent-dim);
+  border-radius: 4px;
+  box-shadow: 2px 2px 0 var(--silhouette);
 }
 
-.step h3 { font-size: 0.95rem; }
-.step p { font-size: 0.9rem; color: var(--ink-soft); line-height: 1.6; }
+.step summary {
+  list-style: none;          /* Firefox */
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 13px 17px;
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 0.98rem;
+}
+
+.step summary::-webkit-details-marker { display: none; }   /* Safari */
+
+.step summary:hover { color: var(--accent); }
+
+.step summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
+  border-radius: 3px;
+}
+
+/* A plus that turns into a cross, so opening and closing read as one motion. */
+.step summary::after {
+  content: "+";
+  flex: none;
+  font-size: 1.25rem;
+  line-height: 1;
+  color: var(--accent);
+  text-shadow: none;
+  transition: transform 0.2s ease;
+}
+
+.step[open] summary::after { transform: rotate(45deg); }
+
+.step[open] { border-left-color: var(--accent); }
+
+.step .body {
+  padding: 0 17px 15px;
+  font-size: 0.92rem;
+  color: var(--ink-soft);
+  line-height: 1.65;
+  max-width: 68ch;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .step summary::after { transition: none; }
+}
 
 .tech-note {
   font-family: var(--display);
@@ -593,23 +715,26 @@ footer {
       </section>
 
       <section id="pitch">
-        <h2>Your mouth is the most intuitive instrument you own</h2>
+        <h2>Your mouth is your most intuitive instrument</h2>
         <div class="stack">
           <p>
-            You have a beat in your head: it is glorious, it is perfect, and so, you get to work. You 
+            <img class="portrait right" src="sad.png" width="1000" height="1000"
+                 alt="Someone holding their head in frustration at a stalled drum programming session.">
+            Finally, you have the world's most glorious beat in your head. You 
             draw it into your DAW one hit at a time, or hunt through a sample pack for a loop that nearly fits, but
             the sounds do not quite match your emotional intent. You probably got somewhere, maybe all of the way there,
             but it was slower and more tedious than it should have been...
           </p>
-          <p>
-            Beatbox it instead! Drumify listens to your input, finds every hit, decides the drum type, 
+          <div class="pitch-row">
+            <img class="portrait left" src="beatbox.png" width="1000" height="1000"
+                 alt="Someone in headphones beatboxing into their hand.">
+            <p>Beatbox it instead! Drumify listens to your input, finds every hit, decides the drum type, 
             and rebuilds the groove with the samples you chose. Your timing, your dynamics, your drums. 
             Want to change the samples of an existing loop instead? Drop in any sample you want and watch
-            it get transformed with your drums.
-          </p>
-          <p>
-            When it sounds right, drag the result straight into your session as audio or MIDI.
-          </p>
+            it get transformed with your drums. When it sounds right, drag the result straight into your
+            session as audio or MIDI.
+            </p>
+          </div>
           <p>
             <strong>Drumify is free, and its algorithms use no AI.</strong> No neural network, no
             model to download, no account, no stealing your data. It uses deterministic digital signal
@@ -635,12 +760,12 @@ footer {
             <div class="cell">
               <div class="name">Boom bap</div>
               <div class="what">Beatboxed into a laptop mic</div>
-              <audio controls preload="none" src="demos/boom-bap-original.mp3"></audio>
+              <button class="play" type="button" data-src="demos/boom-bap-original.mp3"><svg class="play-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1l9 5-9 5z"/></svg><svg class="pause-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1h3v10H2zM7 1h3v10H7z"/></svg><span class="play-text">Play</span></button>
             </div>
             <div class="cell after">
               <div class="name">Boom bap</div>
               <div class="what">Vinyl kit, quantised to 1/16</div>
-              <audio controls preload="none" src="demos/boom-bap-drumify.mp3"></audio>
+              <button class="play" type="button" data-src="demos/boom-bap-drumify.mp3"><svg class="play-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1l9 5-9 5z"/></svg><svg class="pause-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1h3v10H2zM7 1h3v10H7z"/></svg><span class="play-text">Play</span></button>
             </div>
           </div>
 
@@ -648,12 +773,12 @@ footer {
             <div class="cell">
               <div class="name">Four on the floor</div>
               <div class="what">Beatboxed into a laptop mic</div>
-              <audio controls preload="none" src="demos/four-floor-original.mp3"></audio>
+              <button class="play" type="button" data-src="demos/four-floor-original.mp3"><svg class="play-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1l9 5-9 5z"/></svg><svg class="pause-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1h3v10H2zM7 1h3v10H7z"/></svg><span class="play-text">Play</span></button>
             </div>
             <div class="cell after">
               <div class="name">Four on the floor</div>
               <div class="what">909 samples, locked to host tempo</div>
-              <audio controls preload="none" src="demos/four-floor-drumify.mp3"></audio>
+              <button class="play" type="button" data-src="demos/four-floor-drumify.mp3"><svg class="play-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1l9 5-9 5z"/></svg><svg class="pause-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1h3v10H2zM7 1h3v10H7z"/></svg><span class="play-text">Play</span></button>
             </div>
           </div>
 
@@ -661,12 +786,12 @@ footer {
             <div class="cell">
               <div class="name">Breakbeat</div>
               <div class="what">An imported loop, not a voice</div>
-              <audio controls preload="none" src="demos/breakbeat-original.mp3"></audio>
+              <button class="play" type="button" data-src="demos/breakbeat-original.mp3"><svg class="play-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1l9 5-9 5z"/></svg><svg class="pause-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1h3v10H2zM7 1h3v10H7z"/></svg><span class="play-text">Play</span></button>
             </div>
             <div class="cell after">
               <div class="name">Breakbeat</div>
               <div class="what">Kick and snare replaced, hats left alone</div>
-              <audio controls preload="none" src="demos/breakbeat-drumify.mp3"></audio>
+              <button class="play" type="button" data-src="demos/breakbeat-drumify.mp3"><svg class="play-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1l9 5-9 5z"/></svg><svg class="pause-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1h3v10H2zM7 1h3v10H7z"/></svg><span class="play-text">Play</span></button>
             </div>
           </div>
 
@@ -674,12 +799,12 @@ footer {
             <div class="cell">
               <div class="name">Half time</div>
               <div class="what">Beatboxed into a laptop mic</div>
-              <audio controls preload="none" src="demos/half-time-original.mp3"></audio>
+              <button class="play" type="button" data-src="demos/half-time-original.mp3"><svg class="play-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1l9 5-9 5z"/></svg><svg class="pause-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1h3v10H2zM7 1h3v10H7z"/></svg><span class="play-text">Play</span></button>
             </div>
             <div class="cell after">
               <div class="name">Half time</div>
               <div class="what">Acoustic kit, stretched to 0.8x</div>
-              <audio controls preload="none" src="demos/half-time-drumify.mp3"></audio>
+              <button class="play" type="button" data-src="demos/half-time-drumify.mp3"><svg class="play-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1l9 5-9 5z"/></svg><svg class="pause-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1h3v10H2zM7 1h3v10H7z"/></svg><span class="play-text">Play</span></button>
             </div>
           </div>
         </div>
@@ -691,41 +816,36 @@ footer {
           Four stages, all of them 100% explainable and handcrafted. No black boxes here!
         </p>
 
-        <div class="tech-grid">
-          <div class="step">
-            <h3>Where are the hits?</h3>
-            <p>
+        <div class="tech-steps">
+          <details class="step">
+            <summary>Where are the hits?</summary>
+            <p class="body">
               A 2048-point short-time Fourier transform feeds a complex-domain detection
               function. A spiking statistical trigger marks the moment that a transient begins.
             </p>
-          </div>
-          <div class="step">
-            <h3>Let's learn about the hits!</h3>
-            <p>
+          </details>
+          <details class="step">
+            <summary>Let's learn about the hits!</summary>
+            <p class="body">
               Several manually developed features, measuring energy trends, spectral centroid, and more
               for each input drum.
             </p>
-          </div>
-          <div class="step">
-            <h3>So what are they?</h3>
-            <p>
+          </details>
+          <details class="step">
+            <summary>So what are they?</summary>
+            <p class="body">
               A Gaussian naive Bayes classifier weighs the features against measured
               distributions for an ideal kick, snare and hat. Pick the one it matches best!
             </p>
-          </div>
-          <div class="step">
-            <h3>Rebuild the loop!</h3>
-            <p>
+          </details>
+          <details class="step">
+            <summary>Rebuild the loop!</summary>
+            <p class="body">
               Your samples are placed at the original onsets, quantised if you want, with
               unreplaced hits spliced back in and the whole loop normalised.
             </p>
-          </div>
+          </details>
         </div>
-
-        <p class="tech-note">
-          Classification runs offline, after the take, so the analysis is free to be thorough;
-          detection runs live on the audio thread, allocation-free, while you play.
-        </p>
       </section>
 
     </div>
@@ -743,7 +863,7 @@ footer {
 
   </div>
 
-  <footer>Drumify &mdash; built in JUCE by Alexander Vassilev.</footer>
+  <footer>Drumify &mdash; built in JUCE</footer>
 
   </div>
 </div>
@@ -752,6 +872,61 @@ footer {
 // The sheet drifts up as the page scrolls down, and back again on the way up.
 // It eases towards the scroll position rather than tracking it exactly, which
 // is what makes the movement read as slow rather than stuck to the content.
+// <details> has no open animation of its own, so each drawer's height is
+// animated by hand and the element's own open state is set at the right end of
+// it.
+(function () {
+  var drawers = Array.prototype.slice.call(document.querySelectorAll('.step'));
+
+  if (!drawers.length || typeof Element.prototype.animate !== 'function') return;
+
+  var calm = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+  drawers.forEach(function (drawer) {
+    var summary = drawer.querySelector('summary');
+    var running = null;
+
+    if (!summary) return;
+
+    summary.addEventListener('click', function (event) {
+      event.preventDefault();
+
+      if (calm.matches) { drawer.open = !drawer.open; return; }
+
+      if (running) running.cancel();
+
+      var from = drawer.offsetHeight;
+      var to;
+
+      if (drawer.open) {
+        // Measure the closed height while still open. Both reads happen in one
+        // task, so the browser never paints the intermediate state.
+        drawer.open = false;
+        to = drawer.offsetHeight;
+        drawer.open = true;
+      } else {
+        drawer.open = true;
+        to = drawer.offsetHeight;
+      }
+
+      var closing = to < from;
+
+      drawer.style.overflow = 'hidden';
+
+      running = drawer.animate(
+        [{ height: from + 'px' }, { height: to + 'px' }],
+        { duration: closing ? 220 : 280, easing: 'cubic-bezier(0.25, 0.7, 0.3, 1)' }
+      );
+
+      running.onfinish = function () {
+        if (closing) drawer.open = false;
+        drawer.style.overflow = '';
+        running = null;
+      };
+    });
+  });
+})();
+
 // A click sends the plugin through one horizontal turn. The class comes off at
 // the end so a second click starts a fresh spin rather than doing nothing.
 (function () {
@@ -834,11 +1009,13 @@ footer {
   function measure() {
     if (still.matches) { target = 0; return; }
 
-    var scrollable = Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
-    var progress = Math.min(1, Math.max(0, window.scrollY / scrollable));
+    // Tied to how far the page has been scrolled, not to how far through the
+    // page that is: opening a drawer makes the document taller, and anything
+    // measured against its total height would slide the paper sideways in
+    // response. Capped so it stays inside the sheet's own overhang.
+    var travel = window.innerHeight * 0.14;
 
-    // Kept inside the sheet's own overhang, so no edge can come into view.
-    target = -progress * window.innerHeight * 0.14;
+    target = -Math.min(Math.max(0, window.scrollY) * 0.09, travel);
   }
 
   function step() {
@@ -865,5 +1042,50 @@ footer {
 
   measure();
   step();
+})();
+
+/* ---------- demo clips ----------
+   One button per clip, one clip playing at a time. The audio element is made
+   on first press so nothing is fetched until a visitor actually asks. */
+(function () {
+  var buttons = document.querySelectorAll('.cell .play');
+  var playing = null;
+
+  function reset(button) {
+    button.classList.remove('playing');
+    button.querySelector('.play-text').textContent = 'Play';
+  }
+
+  buttons.forEach(function (button) {
+    var sound = null;
+
+    button.addEventListener('click', function () {
+      if (!sound) {
+        sound = new Audio(button.dataset.src);
+        sound.preload = 'none';
+        sound.addEventListener('ended', function () { reset(button); playing = null; });
+      }
+
+      if (!sound.paused) {
+        sound.pause();
+        reset(button);
+        playing = null;
+        return;
+      }
+
+      if (playing && playing !== button) playing.stop();
+
+      sound.play();
+      button.classList.add('playing');
+      button.querySelector('.play-text').textContent = 'Pause';
+      playing = button;
+    });
+
+    // Lets whichever button is playing be stopped from another one's handler.
+    button.stop = function () {
+      if (sound) { sound.pause(); sound.currentTime = 0; }
+      reset(button);
+    };
+  });
 })();
 </script>
