@@ -102,6 +102,143 @@ void HackBrownAudioProcessor::changeProgramName(int index, const juce::String& n
 
 //==============================================================================
 
+//==============================================================================
+BlockTimingLog::BlockTimingLog()
+{
+    // Started here rather than in start(): the processor is built on the message
+    // thread, while prepareToPlay may not be, and a Timer has to begin there.
+    // It does nothing until running is set.
+    if (enabled)
+        startTimerHz (4);
+}
+
+BlockTimingLog::~BlockTimingLog()
+{
+    stopTimer();
+    stop();
+}
+
+juce::File BlockTimingLog::getFile()
+{
+    return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
+             .getChildFile ("DrumifyAnalysis")
+             .getChildFile ("blockTimings.csv");
+}
+
+void BlockTimingLog::start (double sampleRateToUse, int blockSize)
+{
+    if (! enabled)
+        return;
+
+    stop();
+
+    const auto file = getFile();
+    file.getParentDirectory().createDirectory();
+
+    out.open (file.getFullPathName().toStdString(), std::ios::out | std::ios::trunc);
+
+    if (! out.is_open())
+        return;
+
+    out << "block,seconds,numSamples,blockMs,budgetMs,loadPercent,averageLoadPercent,recording\n";
+
+    queue.assign ((size_t) capacity, Entry {});
+    fifo.reset();
+
+    sampleRate = sampleRateToUse;
+    blockIndex = 0;
+    samplePos = 0;
+    dropped.store (0);
+
+    measurer.reset (sampleRateToUse, blockSize);
+    running.store (true);
+}
+
+void BlockTimingLog::stop()
+{
+    if (! running.exchange (false))
+        return;
+
+    drain();
+
+    const auto lost = dropped.load();
+
+    if (lost > 0)
+        out << "# " << lost << " blocks dropped: the queue filled between drains\n";
+
+    out.close();
+}
+
+void BlockTimingLog::record (int numSamples, juce::int64 ticks, bool recording) noexcept
+{
+    if (! running.load (std::memory_order_relaxed))
+        return;
+
+    const auto millis = juce::Time::highResolutionTicksToSeconds (ticks) * 1000.0;
+
+    // Takes a try-lock and skips the sample if it is contended, so it never
+    // blocks this thread.
+    measurer.registerRenderTime (millis, numSamples);
+
+    int start1 = 0, size1 = 0, start2 = 0, size2 = 0;
+    fifo.prepareToWrite (1, start1, size1, start2, size2);
+
+    if (size1 > 0)
+        queue[(size_t) start1] = { blockIndex, samplePos, numSamples, (float) millis,
+                                   (float) measurer.getLoadAsPercentage(), recording };
+    else
+        dropped.fetch_add (1, std::memory_order_relaxed);
+
+    fifo.finishedWrite (size1);
+
+    ++blockIndex;
+    samplePos += numSamples;
+}
+
+void BlockTimingLog::timerCallback()
+{
+    if (running.load())
+        drain();
+}
+
+void BlockTimingLog::drain()
+{
+    if (! out.is_open() || sampleRate <= 0.0)
+        return;
+
+    int start1 = 0, size1 = 0, start2 = 0, size2 = 0;
+    const auto ready = fifo.getNumReady();
+
+    if (ready <= 0)
+        return;
+
+    fifo.prepareToRead (ready, start1, size1, start2, size2);
+
+    const auto writeRange = [this] (int start, int size)
+    {
+        for (int i = 0; i < size; ++i)
+        {
+            const auto& entry = queue[(size_t) (start + i)];
+            const auto budgetMs = 1000.0 * entry.numSamples / sampleRate;
+
+            out << entry.index << ','
+                << (double) entry.samplePos / sampleRate << ','
+                << entry.numSamples << ','
+                << entry.millis << ','
+                << budgetMs << ','
+                << (budgetMs > 0.0 ? 100.0 * entry.millis / budgetMs : 0.0) << ','
+                << entry.averageLoadPercent << ','
+                << (entry.recording ? 1 : 0) << '\n';
+        }
+    };
+
+    writeRange (start1, size1);
+    writeRange (start2, size2);
+
+    fifo.finishedRead (size1 + size2);
+    out.flush();
+}
+
 void HackBrownAudioProcessor::reset()
 {
     isFifoFilled = true;
@@ -478,6 +615,8 @@ void HackBrownAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlo
 
     drumSynth.setCurrentPlaybackSampleRate(sampleRate);
 
+    blockTimingLog.start (sampleRate, samplesPerBlock);
+
     // Allocated here, on the message thread, so recordAudio never has to.
     capturedInput.setSize(1, juce::jmax(1, (int)(maxCapturedInputSeconds * sampleRate)));
     capturedInput.clear();
@@ -517,6 +656,8 @@ void HackBrownAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlo
 
 void HackBrownAudioProcessor::releaseResources()
 {
+    blockTimingLog.stop();
+
     // When playback stops, you can use this as an opportunity to free up any
     // spare memory, etc.
 }
@@ -592,7 +733,7 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
         {
             // This drum is switched off: keep the hit's own audio in the loop.
             // It is spliced in at full level - it is already at its recorded
-            // level - with a short fade at each end, because a hard cut into
+            // lith a short fade at each end, because a hard cut into
             // and out of the rendered material would click.
             const int hitIndex = events[i].hitIndex;
 
@@ -713,12 +854,12 @@ void HackBrownAudioProcessor::classifyAudioBlock (int channel, const float* inpu
             float odfValue = complexOnsetDetector.processFrame(analysisWindow, currSampleInFile);
             onsetConfirmedThisSample = statisticalDetector.processSample(odfValue, currSampleInFile);
             
-            logFile << odfValue << std::endl;
+            //logFile << odfValue << std::endl;
             //DBG("odf: " << odfValue);
             
             if (onsetConfirmedThisSample) {
                 int compensatedOnset = currSampleInFile;
-                DBG("Onset detected at sample index: " << compensatedOnset);
+                //DBG("Onset detected at sample index: " << compensatedOnset);
             }
             
             samplesAccumulated = 0;
@@ -847,6 +988,9 @@ void HackBrownAudioProcessor::startPreview(PreviewSource source) {
 }
 
 void HackBrownAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages) {
+    // First thing in, last thing out, so the early returns below are timed too.
+    BlockTimingLog::ScopedBlock blockTimer (blockTimingLog, buffer.getNumSamples());
+
     if (playprint) {
         DBG("PLAYING");
         DBG("");
@@ -877,6 +1021,7 @@ void HackBrownAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
                     hostBpm.store (*bpm);
     
     const bool recording = recordingEnabled.load();
+    blockTimer.recording = recording;
 
     // A fresh take starts a fresh capture. Edge-detected here rather than in the
     // editor so it stays in step with what the audio thread actually recorded.

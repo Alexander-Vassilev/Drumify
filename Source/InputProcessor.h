@@ -131,9 +131,9 @@ public:
         
         float normFactor = 1.0f / (totalEnergy + 0.05f);
         
-        if (writeToFile && false) {
-            logFile << std::fixed << std::setprecision(0) << std::setw(10) << currSample << " ";
-        }
+        //if (writeToFile && false) {
+        //    logFile << std::fixed << std::setprecision(0) << std::setw(10) << currSample << " ";
+        //}
         
         int changedBinsCount = 0;
         const float noiseFloor = 0.01f;
@@ -160,11 +160,12 @@ public:
             float phase = std::atan2(imag, real);
 
             // --- Write magnitude to file ---
+            /*
             if (writeToFile)
             {
                 // Forces each number to take exactly 10 characters with 4 decimal places
                 logFile << std::fixed << std::setprecision(4) << std::setw(10) << mag << " ";
-            }
+            }*/
             
             // Fetch historical values
             //float mPrev = prevMag[bin];
@@ -233,10 +234,10 @@ public:
         odfValue *= widthMultiplier;
         
         // End the line for this frame (moving to the next row)
-        if (writeToFile)
+        /*if (writeToFile)
         {
             logFile << "\n";
-        }
+        }*/
 
         return odfValue;
     }
@@ -418,11 +419,11 @@ public:
         float currentVariance = mediumHistoryMeanSMA.getVariance();
         float varianceTwoSamplesAgo = prevVariance2;
         
-        if (true)
+        /*if (true)
         DBG (juce::String::formatted (
             "sample #: %-8d | short-term avg: %-12.4f | long-term avg: %-12.4f | VERY long-term avg: %-12.4f | Variance: %-10.4f",
             sampleCount, currentSMA, mediumHistoryMean, longHistoryMean, mediumHistoryMeanSMA.getVariance()
-        ));
+        ));*/
         
         bool onsetConfirmed = false;
         
@@ -457,7 +458,7 @@ public:
             bool longTermTrigger = (mediumMeanRatio > 1.1 && longMeanRatio > 1.4) && (varianceTwoSamplesAgo < 25000);
             
             // If the current average spikes significantly above the running history mean
-            DBG("abs threshold: " << absoluteThreshold);
+            //DBG("abs threshold: " << absoluteThreshold);
             if ((mediumMeanRatio > ratioThreshold || longTermTrigger) && (currentSMA > absoluteThreshold))
             {
                 isTentative = true;

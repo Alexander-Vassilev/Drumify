@@ -64,6 +64,95 @@ enum class PreviewSource {
 };
 
 //==============================================================================
+/** Records how long every processBlock call took, and writes the lot to a CSV.
+
+    The audio thread does nothing but stamp a clock and drop a fixed-size record
+    into a preallocated lock-free queue - no allocation, no locks, no file I/O,
+    so the measurement does not disturb what it is measuring. A timer on the
+    message thread drains the queue to disk four times a second.
+*/
+class BlockTimingLog  : private juce::Timer
+{
+public:
+    /** Flip to false to compile the logging out of a shipping build. */
+    static constexpr bool enabled = true;
+
+    BlockTimingLog();
+    ~BlockTimingLog() override;
+
+    /** Opens a fresh CSV and sizes the queue. Message or setup thread. */
+    void start (double sampleRate, int blockSize);
+    void stop();
+
+    /** Where the rows are written. */
+    static juce::File getFile();
+
+    /** Times one processBlock call and files the result as it goes out of scope. */
+    struct ScopedBlock
+    {
+        ScopedBlock (BlockTimingLog& ownerToUse, int numSamplesInBlock) noexcept
+            : owner (ownerToUse), numSamples (numSamplesInBlock),
+              startTicks (juce::Time::getHighResolutionTicks())
+        {
+        }
+
+        ~ScopedBlock() noexcept
+        {
+            owner.record (numSamples, juce::Time::getHighResolutionTicks() - startTicks, recording);
+        }
+
+        /** Set inside the block once it is known, so the CSV says whether the
+            take was running for that block.
+        */
+        bool recording = false;
+
+    private:
+        BlockTimingLog& owner;
+        const int numSamples;
+        const juce::int64 startTicks;
+
+        JUCE_DECLARE_NON_COPYABLE (ScopedBlock)
+    };
+
+    /** The rolling average load, for anything that wants to display it. */
+    juce::AudioProcessLoadMeasurer measurer;
+
+private:
+    void record (int numSamples, juce::int64 ticks, bool recording) noexcept;   // audio thread
+    void timerCallback() override;                                              // message thread
+    void drain();
+
+    struct Entry
+    {
+        juce::int64 index;
+        juce::int64 samplePos;
+        int numSamples;
+        float millis;
+        float averageLoadPercent;
+        bool recording;
+    };
+
+    // A second and a half of blocks at 64 samples, far more than the 250ms
+    // between drains needs, so the queue never fills in normal use.
+    static constexpr int capacity = 8192;
+
+    juce::AbstractFifo fifo { capacity };
+    std::vector<Entry> queue;
+
+    std::ofstream out;
+    double sampleRate = 0.0;
+
+    std::atomic<bool> running { false };
+    std::atomic<int> dropped { 0 };
+
+    // Audio thread only.
+    juce::int64 blockIndex = 0;
+    juce::int64 samplePos = 0;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (BlockTimingLog)
+};
+
+//==============================================================================
 /**
 */
 class HackBrownAudioProcessor  : public juce::AudioProcessor
@@ -328,6 +417,8 @@ private:
     juce::AudioBuffer<float> restoredInput;
     int startSample = 0; // The sample number of the first hit in the input
     bool wasRecording = false;   // audio thread only; detects the start of a take
+
+    BlockTimingLog blockTimingLog;
     int renderedReadPos = 0;
     bool isPlayingRendered = false;
     
