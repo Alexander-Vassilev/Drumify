@@ -49,21 +49,14 @@ float HitClassifier::computeZeroCrossingRate(const juce::AudioBuffer<float>& buf
     return (float)crossings / (float)length;
 }
 
-float HitClassifier::computeZeroCrossingRateInRange(const juce::AudioBuffer<float>& buffer,
-                                                    int startSample, int endSample)
+float HitClassifier::computeZeroCrossingRateInSpan(const float* data, int numSamples)
 {
-    endSample = juce::jmin(endSample, buffer.getNumSamples());
-    startSample = juce::jmax(0, startSample);
-
-    const int span = endSample - startSample;
-
-    if (span <= 1)
+    if (data == nullptr || numSamples <= 1)
         return 0.0f;
 
-    const float* data = buffer.getReadPointer(0);
     int crossings = 0;
 
-    for (int i = startSample + 1; i < endSample; ++i)
+    for (int i = 1; i < numSamples; ++i)
     {
         const float a = data[i - 1];
         const float b = data[i];
@@ -74,7 +67,7 @@ float HitClassifier::computeZeroCrossingRateInRange(const juce::AudioBuffer<floa
 
     // Normalised by the window actually measured, so a truncated window at the
     // end of a short hit stays comparable with a full one.
-    return (float)crossings / (float)span;
+    return (float)crossings / (float)numSamples;
 }
 
 float HitClassifier::computeSchmittZeroCrossingRateInRange(const juce::AudioBuffer<float>& buffer,
@@ -127,54 +120,113 @@ float HitClassifier::computeSchmittZeroCrossingRateInRange(const juce::AudioBuff
     return static_cast<float>(crossings) / static_cast<float>(span);
 }
 
-/** Windowed-sinc FIR highpass. Linear phase by construction (the kernel is
-    symmetric), so every frequency is delayed by exactly the same amount - the
-    centre tap - and that delay is taken back out at the point of use, leaving
-    the transient where findTransientStart put it.
-
-    Built as a lowpass and spectrally inverted (negate, then add one to the
-    centre tap), which turns a windowed-sinc lowpass into the complementary
-    highpass. Blackman gives a transition of about 5.5/N of the sample rate:
-    118 Hz at 2047 taps and 44.1 kHz, with the stopband down over 70 dB.
-*/
-static const std::vector<float>& getHighpassZcrKernel(double sampleRate)
+void HighpassZcrFilter::prepare (double sampleRate)
 {
-    static std::vector<float> kernel;
-    static double kernelSampleRate = 0.0;
+    if (isPreparedFor (sampleRate))
+        return;
 
-    if (kernelSampleRate == sampleRate && ! kernel.empty())
-        return kernel;
+    const double rate = sampleRate > 0.0 ? sampleRate : 44100.0;
 
-    constexpr int taps = highpassZcrFirTaps;
-    constexpr int centre = taps / 2;
-
-    kernel.assign(taps, 0.0f);
-
-    const double fc = (double)highpassZcrCutoffHz / sampleRate;   // cycles per sample
+    // --- the kernel: a windowed-sinc lowpass, then spectrally inverted ---
+    const double fc = (double) highpassZcrCutoffHz / rate;   // cycles per sample
     double dcGain = 0.0;
 
-    for (int n = 0; n < taps; ++n)
+    for (int n = 0; n < numTaps; ++n)
     {
-        const double k = (double)(n - centre);
+        const double k = (double) (n - centreTap);
         const double sinc = k == 0.0 ? 2.0 * fc
-                                     : std::sin(2.0 * juce::MathConstants<double>::pi * fc * k)
+                                     : std::sin (2.0 * juce::MathConstants<double>::pi * fc * k)
                                          / (juce::MathConstants<double>::pi * k);
 
-        const double phase = 2.0 * juce::MathConstants<double>::pi * (double)n / (double)(taps - 1);
-        const double blackman = 0.42 - 0.5 * std::cos(phase) + 0.08 * std::cos(2.0 * phase);
+        const double phase = 2.0 * juce::MathConstants<double>::pi * (double) n / (double) (numTaps - 1);
+        const double blackman = 0.42 - 0.5 * std::cos (phase) + 0.08 * std::cos (2.0 * phase);
 
-        kernel[n] = (float)(sinc * blackman);
-        dcGain += kernel[n];
+        taps[(size_t) n] = (float) (sinc * blackman);
+        dcGain += taps[(size_t) n];
     }
 
     // Unity DC gain on the lowpass, so the inverted highpass has exactly zero.
-    for (auto& tap : kernel)
-        tap = (float)(-tap / dcGain);
+    for (auto& tap : taps)
+        tap = (float) (-tap / dcGain);
 
-    kernel[centre] += 1.0f;
+    taps[(size_t) centreTap] += 1.0f;
 
-    kernelSampleRate = sampleRate;
-    return kernel;
+    // --- how this build of JUCE scales the inverse transform, measured ---
+    // An impulse through the transform and back comes out as itself times
+    // whatever factor the inverse applies, which differs between the FFT
+    // backends JUCE picks per platform. Measuring it once and folding it into
+    // the spectrum below keeps the spectral multiply correct either way,
+    // rather than hard-coding one convention's 1/fftSize.
+    std::fill (scratchA.begin(), scratchA.end(), juce::dsp::Complex<float> {});
+    scratchA[0] = { 1.0f, 0.0f };
+
+    fft.perform (scratchA.data(), scratchB.data(), false);
+    fft.perform (scratchB.data(), scratchA.data(), true);
+
+    const float roundTrip = scratchA[0].real();
+    const float inverseScale = std::abs (roundTrip) > 1.0e-20f ? 1.0f / roundTrip : 1.0f;
+
+    // --- the kernel's spectrum, zero padded, ready to multiply a window by ---
+    for (int m = 0; m < fftSize; ++m)
+        scratchA[(size_t) m] = { m < numTaps ? taps[(size_t) m] * inverseScale : 0.0f, 0.0f };
+
+    fft.perform (scratchA.data(), kernelSpectrum.data(), false);
+
+    builtForSampleRate = sampleRate;
+}
+
+void HighpassZcrFilter::process (const float* input, int numSamples, int windowStart,
+                                 int windowLength, float* output) noexcept
+{
+    jassert (windowLength > 0 && windowLength <= transientZcrWindowLength);
+
+    // Only the window is wanted, but each of its output samples reaches
+    // centreTap samples either side, so the segment transformed is the window
+    // plus that much context: windowLength + numTaps - 1 samples, starting
+    // centreTap before the window. Everything past it is zero, which is also
+    // what reads beyond the hit should see.
+    const int segmentLength = windowLength + numTaps - 1;
+    const int base = windowStart - centreTap;
+
+    float segmentPeak = 0.0f;
+
+    for (int m = 0; m < fftSize; ++m)
+    {
+        const int i = base + m;
+        const bool inSegment = m < segmentLength && i >= 0 && i < numSamples;
+        const float sample = inSegment ? input[i] : 0.0f;
+
+        scratchA[(size_t) m] = { sample, 0.0f };
+        segmentPeak = juce::jmax (segmentPeak, std::abs (sample));
+    }
+
+    // Silence in, silence out - said explicitly because the transform would
+    // not say it. Its rounding error is proportional to the loudest sample in
+    // the segment, so a silent segment comes back as dust at around 1e-7
+    // rather than as zeros, and dust has sign changes in it. The caller counts
+    // sign changes, so that would read as a high crossing rate where direct
+    // convolution reads zero. A hit loud enough to have been segmented out
+    // never lands here; findTransientStart's own silence fallback can.
+    if (segmentPeak == 0.0f)
+    {
+        std::fill (output, output + windowLength, 0.0f);
+        return;
+    }
+
+    fft.perform (scratchA.data(), scratchB.data(), false);
+
+    for (int m = 0; m < fftSize; ++m)
+        scratchB[(size_t) m] *= kernelSpectrum[(size_t) m];
+
+    fft.perform (scratchB.data(), scratchA.data(), true);
+
+    // Multiplying spectra convolves, and the aligned output - the kernel
+    // centred on each window sample - sits numTaps - 1 into that convolution.
+    // Convolving and correlating agree here because the kernel is symmetric.
+    // The tail beyond segmentLength is the only part that could have wrapped,
+    // and the static_assert on fftSize keeps it clear of this range.
+    for (int k = 0; k < windowLength; ++k)
+        output[k] = scratchA[(size_t) (k + numTaps - 1)].real();
 }
 
 float HitClassifier::computeHighpassedTransientZcr(const juce::AudioBuffer<float>& buffer, int length,
@@ -184,45 +236,30 @@ float HitClassifier::computeHighpassedTransientZcr(const juce::AudioBuffer<float
 
     const int windowStart = juce::jmax(0, transientStart);
     const int windowEnd = juce::jmin(length, transientStart + transientZcrWindowLength);
-    const int windowLength = windowEnd - windowStart;
+
+    // Clamped as well as subtracted: highpassScratch is sized for exactly one
+    // window, and this is what indexes it.
+    const int windowLength = juce::jmin(windowEnd - windowStart, transientZcrWindowLength);
 
     if (windowLength <= 1)
         return 0.0f;
 
-    const auto& kernel = getHighpassZcrKernel(sampleRate > 0.0 ? sampleRate : 44100.0);
-    const int taps = (int)kernel.size();
-    const int centre = taps / 2;
-
-    const float* input = buffer.getReadPointer(0);
-
-    // Only the window is needed, so only the window is filtered: each output
-    // sample is the kernel centred on the matching input sample, which is the
-    // delay compensation. Reads past either end of the hit see silence.
-    // Sized by prepare(); setSize with keepExistingContent false and
-    // avoidReallocating true is a no-op once it is already big enough.
-    highpassScratch.setSize (1, juce::jmax (windowLength, transientZcrWindowLength), false, false, true);
-    float* output = highpassScratch.getWritePointer(0);
-
-    for (int k = 0; k < windowLength; ++k)
+    // prepare() normally has the kernel built already. Building it here is no
+    // longer an allocation, but it is still a fraction of a millisecond of
+    // transcendentals that the audio thread should not be spending.
+    if (! highpassFilter.isPreparedFor (sampleRate))
     {
-        const int inputCentre = windowStart + k;
-        double acc = 0.0;
-
-        for (int j = 0; j < taps; ++j)
-        {
-            const int i = inputCentre + (j - centre);
-
-            if (i >= 0 && i < length)
-                acc += (double)kernel[j] * (double)input[i];
-        }
-
-        output[k] = (float)acc;
+        DBG ("highpass kernel built outside prepare() - rate " << sampleRate);
+        highpassFilter.prepare (sampleRate);
     }
+
+    highpassFilter.process (buffer.getReadPointer (0), length, windowStart, windowLength,
+                            highpassScratch.data());
 
     // Plain sign-change counting rather than the Schmitt version: the highpass
     // has already stripped the sub that the hysteresis was guarding against,
     // and its fixed 0.02 threshold would sit above much of what is left.
-    return computeZeroCrossingRateInRange(highpassScratch, 0, windowLength);
+    return computeZeroCrossingRateInSpan (highpassScratch.data(), windowLength);
 }
 
 int HitClassifier::findTransientStart(const juce::AudioBuffer<float>& buffer, int length, double sampleRate)
@@ -315,10 +352,10 @@ HitFeatures HitClassifier::extractFeatures(const juce::AudioBuffer<float>& buffe
 
 void HitClassifier::prepare(double sampleRate)
 {
-    // Both of these allocate; doing it here means the first hit of a take does
-    // not have to.
-    getHighpassZcrKernel (sampleRate);
-    highpassScratch.setSize (1, transientZcrWindowLength, false, true, false);
+    // The kernel and its spectrum are the only expensive part of the highpass
+    // path; building them here means the first hit of a take costs no more
+    // than any other, and no hit costs an allocation.
+    highpassFilter.prepare (sampleRate);
 }
 
 void HitClassifier::extractFeaturesInto(const juce::AudioBuffer<float>& buffer, int length,
