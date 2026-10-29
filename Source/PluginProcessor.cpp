@@ -617,6 +617,10 @@ void HackBrownAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlo
 
     blockTimingLog.start (sampleRate, samplesPerBlock);
 
+    // Hands classifyHit its sample rate and takes every buffer it needs, so the
+    // per-hit work it does on the audio thread never reaches the allocator.
+    inputProcessor.prepare (sampleRate);
+
     // Allocated here, on the message thread, so recordAudio never has to.
     capturedInput.setSize(1, juce::jmax(1, (int)(maxCapturedInputSeconds * sampleRate)));
     capturedInput.clear();
@@ -1053,7 +1057,10 @@ void HackBrownAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
 void HackBrownAudioProcessor::reconstructLoopFromHits() {
     // algorithm classifies/do classification
     isPlaybackOn.store(false);
-    inputProcessor.classifyStoredHits(getSampleRate());
+
+    // Each hit was classified by InputProcessor as it closed, so there is
+    // nothing left to classify here - only the loop to rebuild from it.
+    // inputProcessor.classifyStoredHits(getSampleRate());
     //DBG("classified");
     //DBG(inputProcessor.classifiedHits[0].durationSec);
     //DBG(inputProcessor.classifiedHits[0].rms);

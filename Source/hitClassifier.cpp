@@ -198,8 +198,10 @@ float HitClassifier::computeHighpassedTransientZcr(const juce::AudioBuffer<float
     // Only the window is needed, so only the window is filtered: each output
     // sample is the kernel centred on the matching input sample, which is the
     // delay compensation. Reads past either end of the hit see silence.
-    juce::AudioBuffer<float> filtered(1, windowLength);
-    float* output = filtered.getWritePointer(0);
+    // Sized by prepare(); setSize with keepExistingContent false and
+    // avoidReallocating true is a no-op once it is already big enough.
+    highpassScratch.setSize (1, juce::jmax (windowLength, transientZcrWindowLength), false, false, true);
+    float* output = highpassScratch.getWritePointer(0);
 
     for (int k = 0; k < windowLength; ++k)
     {
@@ -220,7 +222,7 @@ float HitClassifier::computeHighpassedTransientZcr(const juce::AudioBuffer<float
     // Plain sign-change counting rather than the Schmitt version: the highpass
     // has already stripped the sub that the hysteresis was guarding against,
     // and its fixed 0.02 threshold would sit above much of what is left.
-    return computeZeroCrossingRateInRange(filtered, 0, windowLength);
+    return computeZeroCrossingRateInRange(highpassScratch, 0, windowLength);
 }
 
 int HitClassifier::findTransientStart(const juce::AudioBuffer<float>& buffer, int length, double sampleRate)
@@ -299,9 +301,35 @@ int HitClassifier::findTransientStart(const juce::AudioBuffer<float>& buffer, in
     }
 }*/
 
+/** Allocates: the returned HitFeatures grows its spectrum buffer from nothing
+    every call. Offline use only - the audio thread goes through
+    extractFeaturesInto with a buffer it owns.
+*/
 HitFeatures HitClassifier::extractFeatures(const juce::AudioBuffer<float>& buffer, int length, double sampleRate)
 {
     HitFeatures f;
+    f.stftData.reserve ((size_t) HitFeatures::maxStftFrames);
+    extractFeaturesInto (buffer, length, sampleRate, f);
+    return f;
+}
+
+void HitClassifier::prepare(double sampleRate)
+{
+    // Both of these allocate; doing it here means the first hit of a take does
+    // not have to.
+    getHighpassZcrKernel (sampleRate);
+    highpassScratch.setSize (1, transientZcrWindowLength, false, true, false);
+}
+
+void HitClassifier::extractFeaturesInto(const juce::AudioBuffer<float>& buffer, int length,
+                                        double sampleRate, HitFeatures& f)
+{
+    // clear() keeps whatever capacity the vector has, and the caller is expected
+    // to have taken it already - InputProcessor::prepare does. Nothing here
+    // reserves, so nothing here can reach the allocator.
+    f.stftData.clear();
+    f.fftActive = true;
+
     f.rms = computeRMS(buffer, length);
     f.zcr = computeZeroCrossingRate(buffer, length);
     f.durationSec = (sampleRate > 0.0) ? (float)length / (float)sampleRate : 0.0f;
@@ -311,15 +339,14 @@ HitFeatures HitClassifier::extractFeatures(const juce::AudioBuffer<float>& buffe
     // onset detector left in front of it. Truncated by the range helper when the
     // hit ends before the window does.
     const int transientStart = findTransientStart(buffer, length, sampleRate);
-    DBG("ZCR calc starts: " << transientStart);
-    f.transientZcr = computeSchmittZeroCrossingRateInRange(buffer, transientStart,
-                                                           transientStart + transientZcrWindowLength);
+    //DBG("ZCR calc starts: " << transientStart);
+    f.transientZcr = computeSchmittZeroCrossingRateInRange(buffer, transientStart, transientStart + transientZcrWindowLength);
 
     // The same measurement with everything below 150 Hz removed first, so a
     // kick's fundamental cannot hold the crossing rate down on its own.
     f.highpassZcr = computeHighpassedTransientZcr(buffer, length, transientStart, sampleRate);
     
-    DBG("length: " << f.durationSec);
+    //DBG("length: " << f.durationSec);
     
     if (length < 1025) {
         f.fftActive = false;
@@ -345,11 +372,9 @@ HitFeatures HitClassifier::extractFeatures(const juce::AudioBuffer<float>& buffe
             }
         }
     }
-    
-    return f;
 }
 
-float HitClassifier::getDelta(const std::vector<float>& values, const std::vector<float>& volumes, const std::vector<float>& avgEnergies,
+float HitClassifier::getDelta(const FrameSeries& values, const FrameSeries& volumes, const FrameSeries& avgEnergies,
                               float* energyWeightOut)
 {
     const int intendedFrameCount = 6;
@@ -494,18 +519,21 @@ HitType HitClassifier::classify(const HitFeatures& f, std::ofstream& csvFile, co
     if (f.fftActive) {
         const int movAvgSize = 3;
         const int numWindows = f.stftData.size();
-        int analysisLen = std::min(numWindows, 28);
-        std::vector<float> spectralCentroids;
-        std::vector<float> noBassCentroids;
-        std::vector<float> lowMidCentroids;
-        std::vector<float> avgLowEnergies;
-        std::vector<float> avgLowMidEnergies;
-        std::vector<float> avgMidEnergies;
-        std::vector<float> avgMidHighEnergies;
-        std::vector<float> avgHighEnergies;
-        std::vector<float> prominences;
-        std::vector<float> totalEnergies;
-        std::vector<int> dominantBands;
+        int analysisLen = std::min(numWindows, maxAnalysisLen);
+        // Fixed buffers, not vectors: this runs on the audio thread and each of
+        // these is capped at maxAnalysisLen frames, so none of them needs the
+        // heap.
+        FrameSeries spectralCentroids;
+        FrameSeries noBassCentroids;
+        FrameSeries lowMidCentroids;
+        FrameSeries avgLowEnergies;
+        FrameSeries avgLowMidEnergies;
+        FrameSeries avgMidEnergies;
+        FrameSeries avgMidHighEnergies;
+        FrameSeries avgHighEnergies;
+        FrameSeries prominences;
+        FrameSeries totalEnergies;
+        //std::vector<int> dominantBands;
         
         for (int i = 0; i < analysisLen; i++) {
             std::array<float, numFilters> fftFilterbank = applyMelFilterbank(f.stftData[i], 44100);
@@ -518,9 +546,9 @@ HitType HitClassifier::classify(const HitFeatures& f, std::ofstream& csvFile, co
             
             if (totalEnergy < silenceThreshold) continue;
             
-            for (int j = 0; j < numFilters; j++)
-                std::cout << std::fixed << std::setprecision(1) << std::setw(5) << fftFilterbank[j] << " ";
-            std::cout << std::endl;
+            //for (int j = 0; j < numFilters; j++)
+                //std::cout << std::fixed << std::setprecision(1) << std::setw(5) << fftFilterbank[j] << " ";
+            //std::cout << std::endl;
             
             // 2. Extract features cleanly using the helper class
             float centroid = DrumFeatureExtractor::calculateSpectralCentroid(fftFilterbank, 0, numFilters);
@@ -660,20 +688,24 @@ HitType HitClassifier::classify(const HitFeatures& f, std::ofstream& csvFile, co
         
         increaseFeatureCount(pooledFeatures);
         
-        if (csvFile.is_open())
-        {
-            // Write each column separated by a comma, ending with std::endl to flush to disk
-            csvFile << std::fixed << std::setprecision(4) << ","
-                    << pooledFeatures.meanCentroid << ","
-                    << pooledFeatures.centroidDelta << ","
-                    << pooledFeatures.topEndHeavyRatio << ","
-                    << pooledFeatures.lowEndHeavyRatio << ","
-                    << pooledFeatures.decayRatio << ","
-                    << pooledFeatures.deltaEnergyWeight << ","
-                    << pooledFeatures.transientZcr << ","
-                    << pooledFeatures.meanCentroidNoBass << ","
-                    << pooledFeatures.highpassZcr << std::endl;
-        }
+        // Commented out: classification now runs on the audio thread, and this
+        // is a blocking write with an endl flush on every hit. Restore it (and
+        // the two writes in classifyStoredHits) when running the batch tooling.
+        //
+        // if (csvFile.is_open())
+        // {
+        //     csvFile << std::fixed << std::setprecision(4) << ","
+        //             << pooledFeatures.meanCentroid << ","
+        //             << pooledFeatures.centroidDelta << ","
+        //             << pooledFeatures.topEndHeavyRatio << ","
+        //             << pooledFeatures.lowEndHeavyRatio << ","
+        //             << pooledFeatures.decayRatio << ","
+        //             << pooledFeatures.deltaEnergyWeight << ","
+        //             << pooledFeatures.transientZcr << ","
+        //             << pooledFeatures.meanCentroidNoBass << ","
+        //             << pooledFeatures.highpassZcr << std::endl;
+        // }
+        juce::ignoreUnused (csvFile);
         
         DBG("Hat Probabilities:");
         DBG("Kick Probabilities:");
@@ -709,6 +741,7 @@ HitType HitClassifier::classify(const HitFeatures& f, std::ofstream& csvFile, co
         DBG("Kick Likelihood: " << result.kickProbability);
         DBG("Snare Likelihood: " << result.snareProbability);
 
+        
         // Determine the class with the highest probability
         if (result.hatProbability >= result.kickProbability && result.hatProbability >= result.snareProbability)
             return HitType::Hat;

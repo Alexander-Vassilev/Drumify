@@ -46,6 +46,12 @@ void InputProcessor::addSample(float sample) {
 
 void InputProcessor::reset()
 {
+    // Classification now happens as each hit closes, so the results are cleared
+    // here. clear() keeps the capacity, which prepare() took once - reserving
+    // here instead would allocate, and reset() runs on the audio thread at the
+    // start of a take.
+    classifiedHits.clear();
+
     storedHitsIndex = 0;
     currHitIndex = 0;
     isActivated = false;
@@ -109,6 +115,7 @@ void InputProcessor::processSample(float sample, float amp, bool externalTrigger
                     DBG("Sample " << compensatedCurrSample << ": re-triggered new hit mid-signal (retrospective)");
                     auto& oldHit = storedHits[storedHitsIndex];
                     oldHit.hitLength = hitLength;
+                    classifyHit(storedHitsIndex);
                     storedHitsIndex++;
                 }
 
@@ -166,6 +173,7 @@ void InputProcessor::processSample(float sample, float amp, bool externalTrigger
                     auto& hit = storedHits[storedHitsIndex];
                     hit.hitLength = currHitIndex;
 
+                    classifyHit(storedHitsIndex);
                     storedHitsIndex++;
                     isActivated = false;
                     offsetCounter = 0;
@@ -179,6 +187,54 @@ void InputProcessor::processSample(float sample, float amp, bool externalTrigger
     }
 }
 
+/** Classifies one stored hit and appends the result.
+
+    Called from processSample, so during a live take this runs on the audio
+    thread, inside the same block that completed the hit. The file writes
+    classifyStoredHits used to do - the STFT dump, the per-hit wav, the feature
+    CSV - are deliberately absent: blocking I/O here would risk a dropout.
+    extractFeatures and HitClassifier::classify still allocate internally, which
+    is the remaining real-time hazard.
+*/
+void InputProcessor::prepare(double sampleRate)
+{
+    analysisSampleRate = sampleRate;
+
+    hitClassifier.prepare (sampleRate);
+
+    // The spectrum buffer is the big one - maxStftFrames frames of numBins
+    // floats, about a megabyte. Taken here so the first hit of a take costs no
+    // more than any other.
+    reusableFeatures.stftData.reserve ((size_t) HitFeatures::maxStftFrames);
+
+    // storedHitsIndex caps at numHits, so this capacity is always enough and
+    // reset() need only clear.
+    classifiedHits.reserve (numHits);
+}
+
+void InputProcessor::classifyHit(int index)
+{
+    if (index < 0 || index >= numHits)
+        return;
+
+    const auto& hit = storedHits[(size_t) index];
+
+    // One HitFeatures, reused: its spectrum buffer keeps the capacity it grew
+    // on the first hit, so nothing here allocates afterwards.
+    hitClassifier.extractFeaturesInto(hit.buffer, hit.hitLength, analysisSampleRate, reusableFeatures);
+    const auto& features = reusableFeatures;
+
+    ClassifiedHit classified;
+    classified.hitIndex = index;
+    classified.onsetSample = hit.onsetSample;
+    classified.type = HitClassifier::classify(features, csvFile, classBias);
+    classified.rms = features.rms;
+    classified.zcr = features.zcr;
+    classified.durationSec = features.durationSec;
+
+    classifiedHits.push_back(classified);
+}
+
 void InputProcessor::flush()
 {
     if (isActivated)
@@ -190,7 +246,8 @@ void InputProcessor::flush()
             
             auto& hit = storedHits[storedHitsIndex];
             hit.hitLength = currHitIndex;
-            
+
+            classifyHit(storedHitsIndex);
             storedHitsIndex++;
         }
         
@@ -279,110 +336,35 @@ static void writeExtractedHit (const MouthHit& hit, HitType type, int index,
 
 void InputProcessor::classifyStoredHits(double sampleRate)
 {
+    // Hits are classified by classifyHit as each one closes, so this only
+    // re-runs that pass - for an offline sweep, or after the class bias
+    // changes. The STFT text dump and the per-hit wav write that used to live
+    // here are commented out; they were the bulk of the cost, and classifyHit
+    // now runs on the audio thread during a live take.
+    //
+    // const auto stftFile = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+    //                           .getChildFile("DrumifyAnalysis")
+    //                           .getChildFile("stft_bins.txt");
+    // stftFile.getParentDirectory().createDirectory();
+    // std::ofstream stftOut(...);   // one row per frame, one column per bin
+    // writeExtractedHit(hit, classified.type, i, currFileName, sampleRate);
+
+    analysisSampleRate = sampleRate;
+
     classifiedHits.clear();
     classifiedHits.reserve(storedHitsIndex);
 
-    // Raw STFT dump: one row per frame, one column per bin. Truncated on every
-    // run so the file always holds exactly the take that was just classified,
-    // rather than accumulating across takes the way the feature CSV does.
-    const auto stftFile = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
-                              .getChildFile("DrumifyAnalysis")
-                              .getChildFile("stft_bins.txt");
-
-    stftFile.getParentDirectory().createDirectory();
-
-    std::ofstream stftOut(stftFile.getFullPathName().toStdString(),
-                          std::ios::out | std::ios::trunc);
-
-    // Magnitudes are unnormalised |FFT| and so cannot exceed about fftSize/2,
-    // i.e. 4 integer digits. 9 leaves "1024.00" two spaces of separation; a
-    // value wider than the field would push the whole row out of alignment.
-    constexpr int stftBinFieldWidth = 9;
-
-    DBG("STFT dump -> " << stftFile.getFullPathName());
-
     DBG("---- Classifying Stored Hits ----");
     DBG(storedHitsIndex << " Hits classified");
-    //storedHitsIndex = 1;
-    
-    // Timed around the algorithm alone - feature extraction and the decision.
-    // The STFT dump and the extracted-hit write inside this loop are debug
-    // instrumentation and would swamp the figure if they were counted.
+
     double totalClassificationMs = 0.0;
 
     for (int i = 0; i < storedHitsIndex; ++i)
     {
-        const auto& hit = storedHits[i];
-
-        const auto featureStart = juce::Time::getHighResolutionTicks();
-        const auto features = hitClassifier.extractFeatures(hit.buffer, hit.hitLength, sampleRate);
-        const auto featureMs = juce::Time::highResolutionTicksToSeconds(
-                                   juce::Time::getHighResolutionTicks() - featureStart) * 1000.0;
-        
-        DBG("STFT window count: " << features.stftData.size());
-
-        if (stftOut.is_open())
-        {
-            // '#' prefix so numpy.loadtxt and friends skip the per-hit headers
-            // and still read the whole file as a matrix of frames.
-            stftOut << "# hit " << i
-                    << " frames " << features.stftData.size()
-                    << " bins " << FFTProcessor::numBins
-                    << " sampleRate " << sampleRate
-                    << " onsetSample " << hit.onsetSample << '\n';
-
-            // Fixed 2dp in a fixed-width field, so every bin occupies the same
-            // number of characters and the columns line up down the file.
-            stftOut << std::fixed << std::setprecision(2);
-
-            for (const auto& frame : features.stftData)
-            {
-                for (int bin = 0; bin < FFTProcessor::numBins; ++bin)
-                    stftOut << std::setw(stftBinFieldWidth) << frame[bin];
-
-                stftOut << '\n';
-            }
-
-            // Precision has to go back with the format: leaving it at 2 would
-            // turn the next hit's header into "sampleRate 4.4e+04".
-            stftOut << std::defaultfloat << std::setprecision(6);
-        }
-        
-        ClassifiedHit classified;
-        classified.hitIndex = i;
-        classified.onsetSample = hit.onsetSample;
-        if (csvFile.is_open()) csvFile << currFileName;
-        DBG("zcr: " << features.transientZcr);
-
-        const auto decisionStart = juce::Time::getHighResolutionTicks();
-        classified.type = HitClassifier::classify(features, csvFile, classBias);
-        const auto decisionMs = juce::Time::highResolutionTicksToSeconds(
-                                    juce::Time::getHighResolutionTicks() - decisionStart) * 1000.0;
-
-        classified.rms = features.rms;
-        classified.zcr = features.zcr;
-        classified.durationSec = features.durationSec;
-        DBG(" Dur=" << classified.durationSec << "s");
-
-        const auto hitMs = featureMs + decisionMs;
-        totalClassificationMs += hitMs;
-
-        DBG("Hit #" << i << " (" << HitClassifier::toString(classified.type) << ") classified in "
-                    << juce::String(hitMs, 3) << " ms"
-                    << "  [features " << juce::String(featureMs, 3)
-                    << " ms, decision " << juce::String(decisionMs, 3) << " ms]");
-
-        juce::ignoreUnused(featureMs, decisionMs, hitMs);
-
-        writeExtractedHit(hit, classified.type, i, currFileName, sampleRate);
-
-        classifiedHits.push_back(classified);
-
-        //DBG("Hit #" << i
-         //   << " -> " << HitClassifier::toString(classified.type)
-        //    << " | RMS=" << classified.rms
-        //    << " ZCR=" << classified.zcr
-       //     << " Dur=" << classified.durationSec << "s");
+        const auto started = juce::Time::getHighResolutionTicks();
+        classifyHit(i);
+        totalClassificationMs += juce::Time::highResolutionTicksToSeconds(
+                                     juce::Time::getHighResolutionTicks() - started) * 1000.0;
     }
 
     if (storedHitsIndex > 0)

@@ -64,6 +64,36 @@ struct PooledHitFeatures
     float highpassZcr = 0.0f;       // the same, after a 150 Hz linear-phase highpass
 };
 
+/** A vector-shaped buffer with its storage inside it.
+
+    The classifier runs on the audio thread, where a heap allocation can block
+    on a lock another thread holds. Everything it collects is bounded - at most
+    maxAnalysisLen frames - so the per-frame series live in fixed arrays with a
+    count, and nothing in the hot path touches the allocator.
+*/
+template <int Capacity>
+struct FixedFloats
+{
+    void clear() noexcept                      { count = 0; }
+    void push_back (float v) noexcept          { if (count < Capacity) data[(size_t) count++] = v; }
+
+    int size() const noexcept                  { return count; }
+    bool empty() const noexcept                { return count == 0; }
+    float operator[] (int i) const noexcept    { return data[(size_t) i]; }
+
+    const float* begin() const noexcept        { return data.data(); }
+    const float* end()   const noexcept        { return data.data() + count; }
+
+private:
+    std::array<float, (size_t) Capacity> data {};
+    int count = 0;
+};
+
+/** At most this many spectrum frames are measured per hit. */
+static constexpr int maxAnalysisFrames = 28;
+
+using FrameSeries = FixedFloats<maxAnalysisFrames>;
+
 struct HitFeatures
 {
     float rms = 0.0f;
@@ -75,6 +105,11 @@ struct HitFeatures
     bool fftActive = true;
     int windowCount = 0;
     
+    /** Frames of the hit's spectrum. Reserved once by HitClassifier and reused,
+        so the push_back that fills it never reaches the allocator. A hit is
+        capped at samplesPerHit samples, hence maxStftFrames.
+    */
+    static constexpr int maxStftFrames = 65536 / FFTProcessor::hopSize;
     std::vector<std::array<float, FFTProcessor::numBins>> stftData{};
 };
 
@@ -296,12 +331,13 @@ public:
         return (totalSum > 1e-5f) ? (totalSum / static_cast<float>(totalBins)) : 0.0f;
     }
     
-    static float calculateTemporalCentroid(const std::vector<float>& envelope)
+    template <typename Series>
+    static float calculateTemporalCentroid(const Series& envelope)
     {
         float sumEnergy = 0.0f;
         float weightedSum = 0.0f;
         
-        for (size_t t = 0; t < envelope.size(); ++t)
+        for (int t = 0; t < (int) envelope.size(); ++t)
         {
             float energy = envelope[t];
             weightedSum += static_cast<float>(t) * energy;
@@ -327,6 +363,18 @@ class HitClassifier
 {
 public:
     HitFeatures extractFeatures(const juce::AudioBuffer<float>& buffer, int length, double sampleRate);
+
+    /** Fills a caller-owned HitFeatures instead of returning one, so its
+        stftData keeps its capacity between hits and the audio thread never
+        reaches the allocator. Prefer this on the audio thread.
+    */
+    void extractFeaturesInto(const juce::AudioBuffer<float>& buffer, int length, double sampleRate,
+                             HitFeatures& out);
+
+    /** Builds the high-pass kernel and sizes the scratch buffer ahead of the
+        first hit, so neither allocates during a take.
+    */
+    void prepare(double sampleRate);
     static std::vector<std::vector<juce::dsp::Complex<float>>> getSTFT(const juce::AudioBuffer<float>& buffer, int length);
     static HitType classify(const HitFeatures& f, std::ofstream& csvFile, const ClassBias& bias = {});
     static const char* toString(HitType t);
@@ -408,7 +456,10 @@ private:
         highpassZcrCutoffHz, so the crossing rate reflects the content above the
         bass rather than being pinned low by a kick's fundamental.
     */
-    static float computeHighpassedTransientZcr(const juce::AudioBuffer<float>& buffer, int length,
+    /** Scratch for the high-passed window. Sized by prepare(), reused per hit. */
+    juce::AudioBuffer<float> highpassScratch;
+
+    float computeHighpassedTransientZcr(const juce::AudioBuffer<float>& buffer, int length,
                                                int transientStart, double sampleRate);
 
     /** Where the hit's transient begins, found with an envelope follower over the
@@ -421,7 +472,7 @@ private:
         energy term is reported through `energyWeightOut` when supplied, so it
         can be profiled in its own right.
     */
-    static float getDelta(const std::vector<float>& values, const std::vector<float>& volumes, const std::vector<float>& avgEnergies,
+    static float getDelta(const FrameSeries& values, const FrameSeries& volumes, const FrameSeries& avgEnergies,
                           float* energyWeightOut = nullptr);
     static double calculateGaussianPDF(double x, const FeatureDistribution& dist);
     static double calculateClassLikelihood(const PooledHitFeatures& f, const DrumClassParameters& params);
@@ -440,6 +491,8 @@ private:
         // summarise exactly the rows it appended.
         HitClassifier::batchStats.add (f);
 
-        std::cout << "total centroid: " << HitClassifier::totalFeatures.meanCentroid << std::endl;
+        //std::cout << "total centroid: " << HitClassifier::totalFeatures.meanCentroid << std::endl;
     }
+    
+    static constexpr int maxAnalysisLen = maxAnalysisFrames;
 };

@@ -600,6 +600,26 @@ public:
     HitClassifier hitClassifier;
     int storedHitsIndex = 0;
     void classifyStoredHits(double sampleRate);
+
+    /** Classifies the one hit at `index` and appends the result. Called the
+        moment a hit is finalised, which during a live take is on the audio
+        thread - see the note on analysisSampleRate below.
+    */
+    void classifyHit(int index);
+
+    /** The rate hits are being captured at, so classifyHit does not have to be
+        handed it. Set from prepareToPlay.
+    */
+    double analysisSampleRate = 44100.0;
+
+    /** Reused by classifyHit so its spectrum buffer is only ever grown once. */
+    HitFeatures reusableFeatures;
+
+    /** Takes every buffer the per-hit path needs, so classifyHit can run on the
+        audio thread without reaching the allocator - including the first hit.
+        Call from prepareToPlay.
+    */
+    void prepare(double sampleRate);
     static constexpr int numHits = 256;
     juce::String currFileName;
     std::array<MouthHit, numHits> storedHits;
