@@ -9,7 +9,88 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include <JuceHeader.h>
+
+// Lets the standalone build pick its own block size. Not pulled in by
+// JuceHeader, and harmless in the plugin builds: everything in it is inline,
+// and StandalonePluginHolder::getInstance() is null unless this really is the
+// standalone app.
+#if __has_include(<juce_audio_plugin_client/Standalone/juce_StandaloneFilterWindow.h>)
+ #include <juce_audio_plugin_client/Standalone/juce_StandaloneFilterWindow.h>
+ #define DRUMIFY_CAN_SET_BLOCK_SIZE 1
+#else
+ #define DRUMIFY_CAN_SET_BLOCK_SIZE 0
+#endif
 //void runDrumClassifierSmokeTests();
+
+namespace
+{
+    /** The block size the standalone app asks its audio device for.
+
+        A plugin has no say in this - the host owns the block size and simply
+        tells the plugin what it got - so this only ever applies to the
+        standalone build. Smaller blocks mean the monitored hits come back
+        sooner, at the cost of more callbacks per second.
+    */
+    constexpr int preferredStandaloneBlockSize = 128;
+
+    /** Asks the standalone app's device for preferredStandaloneBlockSize.
+
+        The holder restores whatever block size was last saved in the app's
+        settings file, and that restore happens after the processor is built -
+        so this has to run once the message queue is clear rather than in the
+        constructor, or it would simply be overwritten. Does nothing in a
+        plugin build, and nothing if the device cannot offer that size.
+    */
+    void requestPreferredBlockSize()
+    {
+       #if DRUMIFY_CAN_SET_BLOCK_SIZE
+        auto* holder = juce::StandalonePluginHolder::getInstance();
+
+        if (holder == nullptr)
+            return;
+
+        // Applied at every launch, not just the first. The app saves its audio
+        // setup on every clean shutdown, so a "only if nothing is saved" check
+        // would stop this ever taking effect after the first run. The cost is
+        // that a size picked in the audio dialog lasts for that session only.
+        auto& manager = holder->deviceManager;
+        auto* device = manager.getCurrentAudioDevice();
+
+        if (device == nullptr)
+            return;
+
+        // Devices only accept the sizes they advertise, so asking for one that
+        // is not on the list is refused outright. The nearest size that is on
+        // it is taken instead; on most CoreAudio devices 128 is there exactly.
+        const auto available = device->getAvailableBufferSizes();
+
+        if (available.isEmpty())
+            return;
+
+        int chosen = available[0];
+
+        for (const auto size : available)
+            if (std::abs (size - preferredStandaloneBlockSize) < std::abs (chosen - preferredStandaloneBlockSize))
+                chosen = size;
+
+        auto setup = manager.getAudioDeviceSetup();
+
+        if (setup.bufferSize == chosen)
+            return;
+
+        setup.bufferSize = chosen;
+
+        // treatAsChosenDevice is false: this is the app's own default rather
+        // than something the user picked in the dialog.
+        const auto error = manager.setAudioDeviceSetup (setup, false);
+
+        if (error.isNotEmpty())
+            DBG ("Could not set block size to " << chosen << ": " << error);
+        else
+            DBG ("Standalone block size set to " << chosen);
+       #endif
+    }
+}
 
 //==============================================================================
 HackBrownAudioProcessor::HackBrownAudioProcessor()
@@ -32,6 +113,10 @@ HackBrownAudioProcessor::HackBrownAudioProcessor()
     drumMidiMap[kick]  = 36;
     drumMidiMap[snare] = 38;
     drumMidiMap[hat]   = 42;
+
+    // Deferred, because in the standalone app the audio device is opened after
+    // the processor is constructed - asking now would be undone by that.
+    juce::MessageManager::callAsync ([] { requestPreferredBlockSize(); });
 }
 
 HackBrownAudioProcessor::~HackBrownAudioProcessor()
@@ -251,6 +336,16 @@ void HackBrownAudioProcessor::reset()
     inputProcessor.reset();
     statisticalDetector.reset();
     applySensitivity();
+
+    // inputProcessor.reset() empties classifiedHits, so the count of hits
+    // already monitored and the level they were scaled against both belong to
+    // a take that no longer exists.
+    liveHitsPlayed = 0;
+    livePeakRms = 0.0f;
+
+    // Silences anything still decaying from the previous take, so its tail does
+    // not bleed into the new one. Takes the synth's own lock; nothing allocates.
+    drumSynth.allNotesOff (0, false);
 }
 
 void HackBrownAudioProcessor::applySensitivity()
@@ -875,6 +970,52 @@ void HackBrownAudioProcessor::classifyAudioBlock (int channel, const float* inpu
     }
 }
 
+void HackBrownAudioProcessor::triggerNewlyClassifiedHits (bool play)
+{
+    const auto& hits = inputProcessor.classifiedHits;
+    const int total = (int) hits.size();
+
+    // reanalyseCapturedInput rebuilds classifiedHits from scratch, so the count
+    // can fall as well as rise; without this the counter would sit past the end
+    // and never fire again.
+    if (total < liveHitsPlayed)
+        liveHitsPlayed = total;
+
+    for (; liveHitsPlayed < total; ++liveHitsPlayed)
+    {
+        const auto& hit = hits[(size_t) liveHitsPlayed];
+
+        // rms is a bare RMS with no reference, so it sits well below full scale.
+        // The offline render deals with that by normalising the finished loop,
+        // and nothing can normalise a stream that is still arriving - so the
+        // level is taken against the loudest hit of the take so far instead.
+        // The floor keeps the first few hits of a quiet take audible.
+        livePeakRms = juce::jmax (livePeakRms, hit.rms);
+
+        if (! play)
+            continue;
+
+        // A drum the user has switched off keeps its own audio in the rendered
+        // loop, so there is no sample to monitor it with either.
+        if (! shouldReplaceNote ((int) hit.type))
+            continue;
+
+        // HitType doubles as the MIDI note. Anything the classifier could not
+        // place has no sample of its own and falls back to the hat, which is
+        // what the offline render does with it. The note goes straight to
+        // drumSynth rather than through drumSoundsByNote, because the synth
+        // guards its own sound list against the message thread swapping a
+        // sample in and that map does not.
+        const auto note = (int) (hit.type == HitType::Unknown ? HitType::Hat : hit.type);
+
+        const float velocity = livePeakRms > 0.0f
+                             ? juce::jlimit (0.2f, 1.0f, hit.rms / livePeakRms)
+                             : 1.0f;
+
+        drumSynth.noteOn (1, note, velocity);
+    }
+}
+
 void HackBrownAudioProcessor::recordAudio(juce::AudioBuffer<float>& buffer) {
     isPlayingRendered = true;
     recordingStarted.store(true);
@@ -922,7 +1063,21 @@ void HackBrownAudioProcessor::recordAudio(juce::AudioBuffer<float>& buffer) {
         }
     }
 
+    const bool livePlay = livePlayEnabled.load();
+
+    // Classification runs inline in classifyAudioBlock above, so a hit that
+    // closed anywhere in this block is already in classifiedHits and goes out
+    // in this same block. That is as close behind the player as the analysis
+    // allows: a hit is only classified once it has ended, so the sample lands
+    // roughly a hit-length after the onset that caused it.
+    triggerNewlyClassifiedHits (livePlay);
+
+    // The take itself is never passed through - the input is captured, not
+    // monitored - so the buffer is cleared before the samples are mixed in.
     buffer.clear();
+
+    if (livePlay)
+        drumSynth.renderNextBlock (buffer, liveNoMidi, 0, buffer.getNumSamples());
 }
 
 void HackBrownAudioProcessor::playAudio(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages) {
@@ -1051,6 +1206,12 @@ void HackBrownAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
     } else {
         
         buffer.clear();
+
+        // Lets a hit that was still decaying when the take stopped finish
+        // instead of being cut off mid-tail. Costs nothing once the voices are
+        // idle, and the output is already silent here.
+        if (livePlayEnabled.load())
+            drumSynth.renderNextBlock (buffer, liveNoMidi, 0, buffer.getNumSamples());
     }
 }
 

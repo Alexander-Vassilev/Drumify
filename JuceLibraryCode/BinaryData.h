@@ -32,6 +32,9 @@ namespace BinaryData
     extern const char*   SettingsMenuStatic_png;
     const int            SettingsMenuStatic_pngSize = 70643;
 
+    extern const char*   RealTimeMenu_png;
+    const int            RealTimeMenu_pngSize = 9951;
+
     extern const char*   SliderStrip_png;
     const int            SliderStrip_pngSize = 602875;
 
@@ -156,7 +159,7 @@ namespace BinaryData
     const int            MicUploadLoop_pngSize = 12747;
 
     // Number of elements in the namedResourceList and originalFileNames arrays.
-    const int namedResourceListSize = 49;
+    const int namedResourceListSize = 50;
 
     // Points to the start of a list of resource names.
     extern const char* namedResourceList[];

@@ -326,6 +326,7 @@ DrumifyAssets::DrumifyAssets()
     labelSaveAudio.load  (BinaryData::SaveAudio_png,       BinaryData::SaveAudio_pngSize);
 
     settingsMenu.load (BinaryData::SettingsMenuStatic_png, BinaryData::SettingsMenuStatic_pngSize);
+    realTimeMenu.load (BinaryData::RealTimeMenu_png,       BinaryData::RealTimeMenu_pngSize);
     checkmark.load    (BinaryData::Checkmark_png,          BinaryData::Checkmark_pngSize);
     sliderStrip.load  (BinaryData::SliderStrip_png,        BinaryData::SliderStrip_pngSize);
     about.load        (BinaryData::About_png,              BinaryData::About_pngSize);
@@ -1068,7 +1069,8 @@ namespace
     const juce::Point<int> checkBoxOrigins[] {
         { 107, 261 }, { 107, 313 }, { 107, 365 },                          // kicks, snares, hats
         { 449, 210 }, { 449, 338 }, { 449, 390 }, { 449, 442 }, { 449, 569 }, // quantize, host, file, select, swing
-        { 876, 208 }, { 876, 336 }                                          // stretch output, musical stretch
+        { 876, 208 }, { 876, 336 },                                         // stretch output, musical stretch
+        { 880, 502 }                                                        // real-time enable
     };
 
     // The strip is 221 frames of 315x31; the knob's centre runs from x=17 in
@@ -1102,7 +1104,7 @@ namespace
 
     // Right edge of each box's caption in the static artwork, for the checks
     // that can be disabled. The caption fades with its box.
-    constexpr int captionRight[] { 0, 0, 0, 0, 758, 758, 662, 579, 0, 1172 };
+    constexpr int captionRight[] { 0, 0, 0, 0, 758, 758, 662, 579, 0, 1172, 1025 };
 
     // Tooltips are per region rather than per control: the whole block a
     // control belongs to - its heading, its boxes, its slider and its readout -
@@ -1126,7 +1128,10 @@ namespace
 
         // Stretching
         { { 855, 143, 334, 188 }, "Equally change spacing between drumhits in time" },
-        { { 855, 331, 334,  54 }, "Stretch to BPM rather than by a factor" }
+        { { 855, 331, 334,  54 }, "Stretch to BPM rather than by a factor" },
+
+        // Real-Time
+        { { 855, 431, 334, 130 }, "Hear your drums as you beatbox, before rendering" }
     };
 
     const char* const quantizeNames[] { "1/32", "1/16 t", "1/16", "1/8 t", "1/8", "1/4 t", "1/4" };
@@ -1148,6 +1153,7 @@ SettingsPageComponent::SettingsPageComponent (const DrumifyAssets& a, HackBrownA
     checked[kicks]  = processor.replaceKick;
     checked[snares] = processor.replaceSnare;
     checked[hats]   = processor.replaceHat;
+    checked[realTime] = processor.livePlayEnabled.load();
 
     // Quantised to the host's tempo out of the box - the loop is headed for a
     // DAW - matching the processor's own defaults.
@@ -1308,7 +1314,9 @@ void SettingsPageComponent::toggle (Check c)
         checked[c] = ! checked[c];
     }
 
-    applyToProcessor (Rerender::timing);
+    // Live play only affects what is heard during a take, so it is the one
+    // box that does not make the loop be built again.
+    applyToProcessor (c == realTime ? Rerender::none : Rerender::timing);
     repaint();
 }
 
@@ -1411,6 +1419,11 @@ void SettingsPageComponent::applyToProcessor (Rerender level)
     processor.replaceSnare = checked[snares];
     processor.replaceHat   = checked[hats];
 
+    // Read on the audio thread every block, and it changes nothing about what
+    // is captured or rendered - only whether the take is monitored as drums
+    // while it is being played.
+    processor.livePlayEnabled.store (checked[realTime]);
+
     // The stretch factor is exactly playbackSpeed, which already spaces onsets
     // apart by a factor at render. Musical stretch (to a BPM) is not built yet,
     // so in that mode - or with stretching off - the loop plays unstretched.
@@ -1473,6 +1486,10 @@ void SettingsPageComponent::paint (juce::Graphics& g)
     const auto frame = getLocalBounds().toFloat();
 
     assets.settingsMenu.drawFrame (g, frame);
+
+    // Exported on its own canvas at the same size as the page, so it lands
+    // where it was drawn without any placement of its own.
+    assets.realTimeMenu.drawFrame (g, frame);
 
     for (int i = 0; i < numChecks; ++i)
     {

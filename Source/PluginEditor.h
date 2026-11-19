@@ -148,9 +148,10 @@ struct DrumifyAssets
     AssetLayer savePaint, saveKeyboard, saveLoop;
     AssetLayer labelSaveOutput, labelSaveMidi, labelSaveAudio;
 
-    // The settings page: its static artwork, the checkmark stamped onto a
-    // ticked box, and the slider as a vertical strip of every knob position.
-    AssetLayer settingsMenu, checkmark, sliderStrip;
+    // The settings page: its static artwork, the real-time block drawn over
+    // it on the same canvas, the checkmark stamped onto a ticked box, and the
+    // slider as a vertical strip of every knob position.
+    AssetLayer settingsMenu, realTimeMenu, checkmark, sliderStrip;
 
     // The about page: its heading in the title slot, and the sheet the copy
     // is written on.
@@ -443,7 +444,7 @@ public:
 
 private:
     enum Check { kicks, snares, hats, quantize, lockHost, lockFile, selectBpm, swing,
-                 stretchOutput, musicalStretch, numChecks };
+                 stretchOutput, musicalStretch, realTime, numChecks };
     enum Slide { sensitivity, quantizeAmount, bpm, swingAmount, stretch,
                  biasKick, biasSnare, biasHat, numSlides };
 

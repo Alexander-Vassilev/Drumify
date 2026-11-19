@@ -115,7 +115,7 @@ public:
         const bool writeToFile = logFile.is_open();
         float numBinsReciprocal = 1.0f / static_cast<float>(numBins);
         float distanceScalingFactor = 0;
-        const float reciprocalThree = 1.0f / 3.0f;
+        static const float reciprocalThree = 1.0f / 3.0f;
         
         // --- Pass 1: Calculate raw magnitudes and find the total frame energy ---
         std::vector<float> currentMags(numBins);

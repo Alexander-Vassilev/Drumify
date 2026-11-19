@@ -246,6 +246,19 @@ public:
 
     std::atomic<bool> recordingEnabled { false };
     std::atomic<bool> recordingStarted { false };
+
+    /** When true, every hit is fired at the drum synth the instant it is
+        classified, so the take is monitored as drums while it is still being
+        played. When false the hits are only collected, and the loop is built
+        from them afterwards as it always was.
+
+        The flag changes nothing about what is captured, classified or stored -
+        a take sounds the same in the rendered loop either way. It only decides
+        whether the output bus carries the samples live during the take.
+
+        Read on the audio thread every block, so it can be set from anywhere.
+    */
+    std::atomic<bool> livePlayEnabled { true };
     std::atomic<bool> isPlaybackOn { false };
     juce::AudioBuffer<float> renderedTestBuffer;
     InputProcessor inputProcessor;
@@ -333,6 +346,17 @@ private:
     void classifyAudioBlock (int channel, const float* inputData, int numSamples);
     void recordAudio(juce::AudioBuffer<float>& buffer);
     void playAudio(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages);
+
+    /** Brings liveHitsPlayed up to the number of hits classified so far, and
+        starts a drum synth voice for each one it passes when `play` is set.
+
+        The counter is advanced either way, so switching live play on in the
+        middle of a take starts from the next hit rather than firing every hit
+        recorded up to that point at once.
+
+        Audio thread, inside a take.
+    */
+    void triggerNewlyClassifiedHits (bool play);
     
     juce::dsp::BallisticsFilter<float> envelopeFollower;
     SineGenerator sineGenerator;
@@ -417,6 +441,18 @@ private:
     juce::AudioBuffer<float> restoredInput;
     int startSample = 0; // The sample number of the first hit in the input
     bool wasRecording = false;   // audio thread only; detects the start of a take
+
+    // How many of inputProcessor.classifiedHits have already been played live,
+    // and the loudest hit of the take so far. Audio thread only; reset() clears
+    // both, because the hits they refer to are cleared with it.
+    int liveHitsPlayed = 0;
+    float livePeakRms = 0.0f;
+
+    // Always empty. juce::Synthesiser::renderNextBlock wants a MIDI buffer, and
+    // the live hits arrive through noteOn rather than as MIDI, so nothing is
+    // ever put in this one - holding it as a member means the audio thread
+    // never has to build one.
+    juce::MidiBuffer liveNoMidi;
 
     BlockTimingLog blockTimingLog;
     int renderedReadPos = 0;
