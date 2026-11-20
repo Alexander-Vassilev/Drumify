@@ -219,6 +219,11 @@ void InputProcessor::classifyHit(int index)
 
     const auto& hit = storedHits[(size_t) index];
 
+    // A hit of no length has no features to extract - only reachable from a
+    // truncated saved state, where the samples did not come back with it.
+    if (hit.hitLength <= 0 || hit.buffer.getNumSamples() <= 0)
+        return;
+
     // One HitFeatures, reused: its spectrum buffer keeps the capacity it grew
     // on the first hit, so nothing here allocates afterwards.
     hitClassifier.extractFeaturesInto(hit.buffer, hit.hitLength, analysisSampleRate, reusableFeatures);

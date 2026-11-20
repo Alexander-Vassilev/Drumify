@@ -73,8 +73,7 @@ static const char* const infoPanelText =
     "\n"
     "Stretch output: Spaces the hits apart by a fixed factor, resulting in high quality time "
     "stretching without changing the pitch or timing of the original samples\n"
-    "Musical stretch: Stretch to a certain tempo relative to the quantization BPM, if "
-    "activated.\n"
+    "Musical stretch: Stretch from the quantization BPM (if active) to a target tempo\n"
     "\n"
     "Real-time: Enabling real-time processing allows you to hear drum hits as you beatbox, "
     "but note that there is an inherent latency due to the algorithm needing to hear the drumhit before\n"
@@ -1146,7 +1145,7 @@ namespace
 
     // A bias knob runs 0.25x to 4x on a log scale, so 1x - no bias - sits at
     // the centre of the travel.
-    double biasWeight (float v) { return std::pow (4.0, 2.0 * (double) v - 1.0); }
+    double biasWeight (float v) { return std::pow (6.0, 2.0 * (double) v - 1.0); }
 }
 
 SettingsPageComponent::SettingsPageComponent (const DrumifyAssets& a, HackBrownAudioProcessor& p)
@@ -1166,15 +1165,10 @@ SettingsPageComponent::SettingsPageComponent (const DrumifyAssets& a, HackBrownA
     checked[quantize] = false;
     checked[lockHost] = true;
 
-    // Musically sensible resting positions. Stretch must start at 1x - it is
-    // wired to playbackSpeed, and ticking "Stretch output" should not warp the
-    // loop until the knob is moved.
-    value[sensitivity]    = 0.5f;
-    value[quantizeAmount] = 2.0f / (numQuantizeSteps - 1);   // 1/16
-    value[bpm]            = (120.0f - 10.0f) / 210.0f;        // 120 BPM
-    value[swingAmount]    = 0.0f;
-    value[stretch]        = 0.5f;                             // 1x on the log scale
-    value[biasKick] = value[biasSnare] = value[biasHat] = 0.5f;   // 1x: no bias
+    // Musically sensible resting positions - see defaultValue, which a
+    // right-click on a knob comes back to as well.
+    for (int i = 0; i < numSlides; ++i)
+        value[i] = defaultValue ((Slide) i);
 
     // ...unless an earlier editor left its settings behind, in which case the
     // defaults above were only ever a starting point for the first one.
@@ -1227,7 +1221,11 @@ bool SettingsPageComponent::isEnabled (Check c) const
         case lockHost: case lockFile: case selectBpm: case swing:
             return checked[quantize];
         case musicalStretch:
-            return checked[stretchOutput];
+            // Stretching to a tempo needs a tempo grid to stretch onto, and
+            // that is what quantisation sets up - so without it there is
+            // nothing for this to mean, and it greys out alongside the rest
+            // of the grid's controls.
+            return checked[stretchOutput] && checked[quantize];
         default:
             return true;
     }
@@ -1243,6 +1241,59 @@ bool SettingsPageComponent::isEnabled (Slide sl) const
         case stretch:        return checked[stretchOutput];
         default:             return true;
     }
+}
+
+bool SettingsPageComponent::musicalStretchActive() const
+{
+    return checked[musicalStretch] && isEnabled (musicalStretch);
+}
+
+double SettingsPageComponent::selectedBpm() const
+{
+    return (double) juce::roundToInt (10.0f + value[bpm] * 210.0f);
+}
+
+double SettingsPageComponent::targetStretchBpm() const
+{
+    return (double) juce::roundToInt (10.0f + value[stretch] * 210.0f);
+}
+
+float SettingsPageComponent::defaultValue (Slide sl) const
+{
+    switch (sl)
+    {
+        case quantizeAmount:
+            return 2.0f / (numQuantizeSteps - 1);   // 1/16
+
+        case bpm:
+            return (120.0f - 10.0f) / 210.0f;       // 120 BPM
+
+        case swingAmount:
+            return 0.0f;
+
+        case stretch:
+            // Asked for as a tempo, the knob rests at the one the loop is
+            // already at, which is the same no-op 1x it rests at as a factor.
+            if (musicalStretchActive())
+            {
+                const double grid = processor.effectiveQuantizeBpm();
+
+                if (grid > 0.0)
+                    return juce::jlimit (0.0f, 1.0f, (float) ((grid - 10.0) / 210.0));
+            }
+
+            return 0.5f;                            // 1x on the log scale
+
+        default:
+            return 0.5f;   // sensitivity in the middle, and 1x on each bias
+    }
+}
+
+SettingsPageComponent::Rerender SettingsPageComponent::rerenderFor (Slide sl) const
+{
+    return sl == sensitivity ? Rerender::detection
+         : sl >= biasKick    ? Rerender::classes
+                             : Rerender::timing;
 }
 
 int SettingsPageComponent::checkAt (juce::Point<int> p) const
@@ -1360,6 +1411,17 @@ void SettingsPageComponent::mouseDown (const juce::MouseEvent& e)
 
     if (const int sl = slideAt (p); sl >= 0 && isEnabled ((Slide) sl))
     {
+        // Right-click puts the knob back where it started instead of starting
+        // a drag. Nothing here has a field to type a value into, so a knob
+        // nudged off its resting position could otherwise only be found again
+        // by eye.
+        if (e.mods.isPopupMenu())
+        {
+            setSlider ((Slide) sl, defaultValue ((Slide) sl));
+            applyToProcessor (rerenderFor ((Slide) sl));
+            return;
+        }
+
         dragging = sl;
         setSlider ((Slide) sl, valueForX ((Slide) sl, p.x));
     }
@@ -1379,9 +1441,7 @@ void SettingsPageComponent::mouseUp (const juce::MouseEvent&)
     // A slider only reaches the processor when the drag ends: re-rendering the
     // loop on every mouse-move would be far too heavy. What has to run again
     // depends on where in the pipeline the slider acts.
-    const auto level = dragging == sensitivity ? Rerender::detection
-                     : dragging >= biasKick    ? Rerender::classes
-                                               : Rerender::timing;
+    const auto level = rerenderFor ((Slide) dragging);
     dragging = -1;
 
     applyToProcessor (level);
@@ -1402,11 +1462,11 @@ juce::String SettingsPageComponent::readout (Slide sl) const
             if (checked[lockHost] || checked[lockFile])
                 return juce::String (juce::roundToInt ((float) processor.effectiveQuantizeBpm())) + " BPM";
 
-            return juce::String (juce::roundToInt (10.0f + v * 210.0f)) + " BPM";
+            return juce::String (juce::roundToInt (selectedBpm())) + " BPM";
 
         case stretch:
-            if (checked[musicalStretch])
-                return juce::String (juce::roundToInt (10.0f + v * 210.0f)) + " BPM";
+            if (musicalStretchActive())
+                return juce::String (juce::roundToInt (targetStretchBpm())) + " BPM";
 
             // 0.1x to 10x on a log scale, so 1x sits at the centre of the travel.
             return juce::String (0.1 * std::pow (100.0, (double) v), 2) + "x";
@@ -1430,13 +1490,30 @@ void SettingsPageComponent::applyToProcessor (Rerender level)
     // while it is being played.
     processor.livePlayEnabled.store (checked[realTime]);
 
-    // The stretch factor is exactly playbackSpeed, which already spaces onsets
-    // apart by a factor at render. Musical stretch (to a BPM) is not built yet,
-    // so in that mode - or with stretching off - the loop plays unstretched.
-    if (checked[stretchOutput] && ! checked[musicalStretch])
-        processor.playbackSpeed = (float) (0.1 * std::pow (100.0, (double) value[stretch]));
-    else
+    // The stretch factor is exactly playbackSpeed, which spaces the onsets
+    // apart at render - so a factor above 1 plays the loop slower.
+    //
+    // Musical stretch asks for a tempo rather than a factor. What the loop is
+    // already at is the tempo the grid is using, so the factor is the ratio
+    // between the two: a 90 BPM loop asked for 45 is spaced out twice as far
+    // and plays half as fast.
+    if (! checked[stretchOutput])
+    {
         processor.playbackSpeed = 1.0f;
+    }
+    else if (musicalStretchActive())
+    {
+        const double grid   = processor.effectiveQuantizeBpm();
+        const double target = targetStretchBpm();
+
+        processor.playbackSpeed = (grid > 0.0 && target > 0.0)
+                                ? (float) (grid / target)
+                                : 1.0f;
+    }
+    else
+    {
+        processor.playbackSpeed = (float) (0.1 * std::pow (100.0, (double) value[stretch]));
+    }
 
     // Quantisation, converted from knob positions to real units here so the
     // processor never has to know the sliders' ranges. Which BPM the grid uses
@@ -1446,7 +1523,7 @@ void SettingsPageComponent::applyToProcessor (Rerender level)
     processor.bpmSource        = checked[lockHost] ? HackBrownAudioProcessor::BpmSource::host
                                : checked[lockFile] ? HackBrownAudioProcessor::BpmSource::file
                                                    : HackBrownAudioProcessor::BpmSource::selected;
-    processor.quantizeBpm      = 10.0 + (double) value[bpm] * 210.0;
+    processor.quantizeBpm      = selectedBpm();
     processor.quantizeDivision = quantizeDivisions[juce::jlimit (0, numQuantizeSteps - 1,
                                                                 juce::roundToInt (value[quantizeAmount] * (numQuantizeSteps - 1)))];
     processor.swingAmount      = checked[swing] ? (double) value[swingAmount] : 0.0;
@@ -1473,8 +1550,10 @@ void SettingsPageComponent::applyToProcessor (Rerender level)
             break;
 
         case Rerender::classes:
-            if (! processor.inputProcessor.classifiedHits.empty())
-                processor.reconstructLoopFromHits();   // classifies the stored hits again
+            // The bias only acts at the moment a hit is labelled, so the stored
+            // hits have to go through the classifier again - rebuilding the loop
+            // on its own would just lay down the labels it already had.
+            processor.reclassifyStoredHits();   // bows out with nothing stored
             break;
 
         case Rerender::timing:
@@ -1615,7 +1694,9 @@ HackBrownAudioProcessorEditor::HackBrownAudioProcessorEditor (HackBrownAudioProc
         for (const auto& stale : folder.findChildFiles (juce::File::findFiles, false))
             stale.deleteFile();
 
-    updateButton.onClick   = [this] { audioProcessor.reconstructLoopFromHits(); };
+    // Refresh re-runs the classifier as well as the render, so a loop that was
+    // analysed before the Prefer sliders moved comes back relabelled.
+    updateButton.onClick   = [this] { audioProcessor.reclassifyStoredHits(); };
     settingsButton.onClick = [this] { toggleSettingsPage(); };
     questionButton.onClick = [this] { toggleInfoPage(); };
     homeButton.onClick     = [this] { goHome(); };
@@ -1879,11 +1960,6 @@ void HackBrownAudioProcessorEditor::timerCallback()
 }
 
 
-// Dev tool. Absolute because a plugin binary has no reliable way back to the
-// repo. Matches the style of the CSV path InputProcessor's constructor opens.
-static const char* const batchAnalysisRoot =
-    "/Users/lightspark/Documents/JuceProjects/HackBrown2026";
-
 namespace
 {
     struct BatchTarget
@@ -2015,6 +2091,11 @@ namespace
 
 void HackBrownAudioProcessorEditor::batchAnalyseFolder()
 {
+    if (!batchActivated) return;
+    // Dev tool. Absolute because a plugin binary has no reliable way back to the
+    // repo. Matches the style of the CSV path InputProcessor's constructor opens.
+    static const char* const batchAnalysisRoot =
+        "/Users/lightspark/Documents/JuceProjects/HackBrown2026";
     const juce::File root { batchAnalysisRoot };
 
     juce::StringArray summary;

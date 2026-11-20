@@ -530,19 +530,22 @@ public:
         // 1. Target the Downloads folder
         auto downloadsDir = juce::File::getSpecialLocation(juce::File::userHomeDirectory)
                             .getChildFile("Downloads");
-        juce::File file ("/Users/lightspark/Documents/JuceProjects/HackBrown2026/Data/snarestats.csv");
-        //auto file = downloadsDir.getChildFile("drum_features.csv");
+        
+        if (csvActivated) {
+            juce::File file ("/Users/lightspark/Documents/JuceProjects/Drumify/Data/snarestats.csv");
+            //auto file = downloadsDir.getChildFile("drum_features.csv");
 
-        // 2. Check if the file is new before opening it
-        const bool isNewFile = !file.exists();
+            // 2. Check if the file is new before opening it
+            const bool isNewFile = !file.exists();
 
-        // 3. Open in Output + Append mode
-        csvFile.open(file.getFullPathName().toStdString(), std::ios::out | std::ios::app);
+            // 3. Open in Output + Append mode
+            csvFile.open(file.getFullPathName().toStdString(), std::ios::out | std::ios::app);
 
-        // 4. Write the header row ONLY if the file was just created
-        if (isNewFile && csvFile.is_open())
-        {
-            csvFile << csvHeader << std::endl;
+            // 4. Write the header row ONLY if the file was just created
+            if (isNewFile && csvFile.is_open())
+            {
+                csvFile << csvHeader << std::endl;
+            }
         }
     };
 
@@ -627,8 +630,8 @@ public:
     std::vector<ClassifiedHit> classifiedHits;
     std::ofstream csvFile;
 
-    // Per-class prior weights from the settings page, applied by
-    // classifyStoredHits. Message thread only.
+    // Per-class prior weights from the settings page, read by classifyHit
+    // every time a hit is labelled. Message thread only.
     ClassBias classBias;
 private:
     /*
@@ -685,6 +688,7 @@ private:
     int minHitLength = 512; // In Samples
 
     bool isActivated = false;
+    static constexpr bool csvActivated = false;
     
     static constexpr float statisticalRatioThreshold = 3.0f; // Adjust this threshold to taste
     static constexpr float statisticalAbsoluteThreshold = 0.15f; // Adjust this threshold to taste

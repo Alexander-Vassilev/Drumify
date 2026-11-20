@@ -884,10 +884,29 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
     kept.setSize(renderChannels, outputNumSamples);
     kept.clear();
 
-    int offset = 0;
+    // The output opens on whichever event plays first, so everything in the
+    // recording ahead of it is dropped. Found by position rather than by order:
+    // nothing guarantees the events arrive sorted.
+    size_t firstEvent = 0;
 
-    if (events.size() >= 1) {
-        offset = events[0].sampleIndex * playbackSpeed;
+    for (size_t e = 1; e < events.size(); ++e)
+        if (events[e].sampleIndex < events[firstEvent].sampleIndex)
+            firstEvent = e;
+
+    int offset = 0;
+    int leadIn = 0;
+
+    if (! events.empty())
+    {
+        offset = (int) (events[firstEvent].sampleIndex * playbackSpeed);
+
+        // Kept at its own audio, the first hit needs the recording just ahead
+        // of its onset too - that is where its attack actually starts. See
+        // startLeadInSeconds.
+        if (! shouldReplaceNote (events[firstEvent].midiNote))
+            leadIn = juce::jmin (offset, (int) (startLeadInSeconds * sampleRate));
+
+        offset -= leadIn;
     }
 
     // Where every event lands in the output, worked out up front: a hit kept
@@ -1001,6 +1020,12 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
                                juce::jmin (channel, capturedInput.getNumChannels() - 1),
                                offset, available);
 
+        // The lead-in can start mid-signal - it is only as long as it is
+        // allowed to be, not as long as the quiet before the take - so it is
+        // ramped up. The hit's own attack begins after it and is untouched.
+        if (leadIn > 0)
+            rampAllChannels (kept, 0, juce::jmin (fadeInSamples, leadIn), 0.0f, 1.0f);
+
         // Every stretch of the bed a replaced hit stands in for, in the order
         // they play, so that each one's ramps can see what follows it.
         struct Span { int start, end; };
@@ -1073,6 +1098,10 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
         juce::AudioBuffer<float> copier;
         const bool replaced = shouldReplaceNote (events[i].midiNote);
 
+        // How much of the recording ahead of this hit's onset the copy carries,
+        // which only the hit that opens the loop has any.
+        int lead = 0;
+
         if (! replaced)
         {
             // Already there, in the bed, along with everything around it.
@@ -1124,9 +1153,6 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
                                             - (eventStart[(size_t) i] + hitLength)
                                           : 0;
 
-            copier.setSize (renderChannels, hitLength + tail);
-            copier.clear();
-
             // storedHits keeps a mono copy for the classifier. capturedInput
             // holds the same audio with its channels intact and is indexed by
             // the same onset, so the hit is taken from there where it reaches,
@@ -1134,12 +1160,20 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
             const int from = hit.onsetSample;
             const bool fromRecording = from >= 0 && capturedLength >= from + hitLength;
 
+            // Only the recording has anything before the onset; the stored copy
+            // starts there, so a fallback has no lead-in to give.
+            if (fromRecording && (size_t) i == firstEvent)
+                lead = juce::jmin (leadIn, from);
+
+            copier.setSize (renderChannels, lead + hitLength + tail);
+            copier.clear();
+
             for (int channel = 0; channel < copier.getNumChannels(); ++channel)
             {
                 if (fromRecording)
                     copier.copyFrom (channel, 0, capturedInput,
                                      juce::jmin (channel, capturedInput.getNumChannels() - 1),
-                                     from, hitLength);
+                                     from - lead, lead + hitLength);
                 else
                     copier.copyFrom (channel, 0, hit.buffer, 0, 0, hitLength);
             }
@@ -1151,7 +1185,7 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
 
                 if (available > 0)
                     for (int channel = 0; channel < copier.getNumChannels(); ++channel)
-                        copier.copyFrom (channel, hitLength, capturedInput,
+                        copier.copyFrom (channel, lead + hitLength, capturedInput,
                                          juce::jmin (channel, capturedInput.getNumChannels() - 1),
                                          tailFrom, available);
             }
@@ -1195,7 +1229,10 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
         }
         //DBG("attempting copy");
         //DBG("start sample: " << events[i].sampleIndex * playbackSpeed - offset);
-        const int startSample = (int) (events[i].sampleIndex * playbackSpeed) - offset;
+        // The lead-in sits in front of the onset, so a copy that carries one
+        // is written that much earlier - which, for the hit that opens the
+        // loop, puts it at the very start of the output.
+        const int startSample = eventStart[(size_t) i] - lead;
 
         // outputNumSamples is derived from unscaled onsets, so a playbackSpeed
         // above 1 can push a hit past the end of the buffer. Clamp the copy
@@ -1562,13 +1599,33 @@ void HackBrownAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
     }
 }
 
+void HackBrownAudioProcessor::reclassifyStoredHits()
+{
+    // The audio thread owns the detector and the stored hits during a take.
+    if (recordingEnabled.load())
+        return;
+
+    if (inputProcessor.storedHitsIndex <= 0)
+        return;
+
+    isPlaybackOn.store (false);
+
+    // The rate the hits were captured at, not the host's current one: an
+    // uploaded loop was analysed at whatever rate was in force then, and the
+    // features have to be extracted the same way to mean the same thing.
+    inputProcessor.classifyStoredHits (inputProcessor.analysisSampleRate);
+
+    reconstructLoopFromHits();
+}
+
 void HackBrownAudioProcessor::reconstructLoopFromHits() {
     // algorithm classifies/do classification
     isPlaybackOn.store(false);
 
     // Each hit was classified by InputProcessor as it closed, so there is
-    // nothing left to classify here - only the loop to rebuild from it.
-    // inputProcessor.classifyStoredHits(getSampleRate());
+    // nothing to classify here - only the loop to rebuild from the labels.
+    // When the decision itself has to be made again, reclassifyStoredHits
+    // runs the classifier first and then calls this.
     //DBG("classified");
     //DBG(inputProcessor.classifiedHits[0].durationSec);
     //DBG(inputProcessor.classifiedHits[0].rms);

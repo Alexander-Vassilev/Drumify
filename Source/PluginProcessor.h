@@ -75,7 +75,7 @@ class BlockTimingLog  : private juce::Timer
 {
 public:
     /** Flip to false to compile the logging out of a shipping build. */
-    static constexpr bool enabled = true;
+    static constexpr bool enabled = false;
 
     BlockTimingLog();
     ~BlockTimingLog() override;
@@ -205,6 +205,14 @@ public:
     void processUploadedLoop(const juce::File& file);
     
     void reconstructLoopFromHits();
+
+    /** Runs the classifier over the hits already stored, then rebuilds the loop
+        from the labels that come back. Each hit is labelled once, as it closes,
+        so a change that only affects the decision - the per-class bias from the
+        Prefer sliders - needs this rather than reconstructLoopFromHits, which
+        rebuilds from the labels it already has. Nothing is detected again.
+    */
+    void reclassifyStoredHits();
     void getLongestSampleLengthInSamples();
 
     /** State that belongs to the editor but has to live here. A host destroys
@@ -348,6 +356,18 @@ public:
         few milliseconds between them is audible as a gap that was not there.
     */
     static constexpr double keptHitStitchSeconds = 0.100;
+
+    /** How much of the recording before the first hit the render opens with,
+        when that hit is kept at its own audio rather than replaced.
+
+        A detected onset sits a little way into the attack - the transient has
+        to build before it can cross a threshold and be found at all - so a
+        render that began exactly at the first onset opened on a hit with its
+        front clipped off. Bounded, so that dead air before the take started
+        is still trimmed; a replaced first hit gets none of it, because its
+        sample's transient belongs at the top of the loop.
+    */
+    static constexpr double startLeadInSeconds = 0.050;
 private:
     void reset();
 

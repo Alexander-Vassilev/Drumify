@@ -18,7 +18,6 @@
       <FILE id="cZlXZl" name="InputProcessor.h" compile="0" resource="0"
             file="Source/InputProcessor.h"/>
       <GROUP id="{8E3204D1-BD8C-E384-31BA-1B4519EC1617}" name="Resources">
-        <FILE id="eE78TZ" name="morning.png" compile="0" resource="1" file="morning.png"/>
         <FILE id="IjcVWC" name="Hat.wav" compile="0" resource="1" file="DrumSamples/Hat.wav"/>
         <FILE id="u1utX3" name="Kick.wav" compile="0" resource="1" file="DrumSamples/Kick.wav"/>
         <FILE id="jezoTa" name="Snare.wav" compile="0" resource="1" file="DrumSamples/Snare.wav"/>

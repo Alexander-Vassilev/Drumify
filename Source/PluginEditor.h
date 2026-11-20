@@ -457,6 +457,30 @@ private:
     bool isEnabled (Check) const;
     bool isEnabled (Slide) const;
 
+    /** Whether stretching to a tempo is in force, rather than just ticked: the
+        box keeps its tick while greyed out, and a greyed box does nothing.
+    */
+    bool musicalStretchActive() const;
+
+    /** The knob's resting position - where it starts, and where a right-click
+        puts it back to.
+    */
+    float defaultValue (Slide) const;
+
+    /** How much of the pipeline this knob's value feeds, so a drag and a
+        right-click re-run the same part of it.
+    */
+    Rerender rerenderFor (Slide) const;
+
+    /** The Select BPM knob, as a whole number: a grid at 90.1 BPM drifts
+        against a host at 90, so the knob reads out and quantises to the same
+        integer rather than to wherever it happens to sit.
+    */
+    double selectedBpm() const;
+
+    /** The tempo the Stretch knob is asking for, while Musical stretch is on. */
+    double targetStretchBpm() const;
+
     int checkAt (juce::Point<int>) const;   // index, or -1
     int slideAt (juce::Point<int>) const;
 
@@ -604,6 +628,7 @@ private:
     float slideProgress = 0.0f;
     bool infoPageVisible = false;
     bool settingsPageVisible = false;
+    static constexpr bool batchActivated = false;
 
     DrumKitComponent drumKit { assets };
     SpeakerComponent speakers { assets };

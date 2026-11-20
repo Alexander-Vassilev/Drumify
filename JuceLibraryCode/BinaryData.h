@@ -8,9 +8,6 @@
 
 namespace BinaryData
 {
-    extern const char*   morning_png;
-    const int            morning_pngSize = 1979627;
-
     extern const char*   Hat_wav;
     const int            Hat_wavSize = 16204;
 
@@ -159,7 +156,7 @@ namespace BinaryData
     const int            MicUploadLoop_pngSize = 12747;
 
     // Number of elements in the namedResourceList and originalFileNames arrays.
-    const int namedResourceListSize = 50;
+    const int namedResourceListSize = 49;
 
     // Points to the start of a list of resource names.
     extern const char* namedResourceList[];
