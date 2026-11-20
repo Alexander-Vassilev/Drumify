@@ -74,7 +74,11 @@ static const char* const infoPanelText =
     "Stretch output: Spaces the hits apart by a fixed factor, resulting in high quality time "
     "stretching without changing the pitch or timing of the original samples\n"
     "Musical stretch: Stretch to a certain tempo relative to the quantization BPM, if "
-    "activated.\n";
+    "activated.\n"
+    "\n"
+    "Real-time: Enabling real-time processing allows you to hear drum hits as you beatbox, "
+    "but note that there is an inherent latency due to the algorithm needing to hear the drumhit before\n"
+    "classifying it.\n";
 
 //==============================================================================
 juce::Font DrumifyTheme::mono (float height, bool bold)
@@ -1155,9 +1159,11 @@ SettingsPageComponent::SettingsPageComponent (const DrumifyAssets& a, HackBrownA
     checked[hats]   = processor.replaceHat;
     checked[realTime] = processor.livePlayEnabled.load();
 
-    // Quantised to the host's tempo out of the box - the loop is headed for a
-    // DAW - matching the processor's own defaults.
-    checked[quantize] = true;
+    // Off out of the box, matching the processor's own default: a take should
+    // come back sounding like what was played, and the grid is there for when
+    // that is not what is wanted. The host is the BPM source it starts from
+    // once the grid is switched on.
+    checked[quantize] = false;
     checked[lockHost] = true;
 
     // Musically sensible resting positions. Stretch must start at 1x - it is

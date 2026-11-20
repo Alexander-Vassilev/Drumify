@@ -384,14 +384,14 @@ void HackBrownAudioProcessor::reanalyseCapturedInput()
     if (recordingEnabled.load())
         return;
 
-    const int length = juce::jmin (capturedInputLength.load(), capturedInput.getNumSamples());
+    const int length = juce::jmin (capturedInputLength.load(), analysisInput.getNumSamples());
 
-    if (length <= 0 || capturedInput.getNumChannels() == 0)
+    if (length <= 0 || analysisInput.getNumChannels() == 0)
         return;
 
     isPlaybackOn.store (false);
     reset();
-    runDetection (capturedInput.getReadPointer (0), length);
+    runDetection (analysisInput.getReadPointer (0), length);
     reconstructLoopFromHits();
 }
 
@@ -506,12 +506,22 @@ void HackBrownAudioProcessor::analyzeLoadedDrumLoop (const juce::AudioBuffer<flo
     const float* totalInputData = monoBuffer.getReadPointer (0);
 
     // This is the "original input" for an uploaded loop, so keep it for the
-    // preview the same way recordAudio keeps a live take.
+    // preview the same way recordAudio keeps a live take. The file's own
+    // channels are kept, not the mono sum the analysis runs on: this is what
+    // the preview plays and what the render lays down under a partly replaced
+    // loop, and a stereo file should come back out as it went in.
     {
         const int toKeep = juce::jmin (totalSamples, capturedInput.getNumSamples());
 
         if (toKeep > 0)
-            capturedInput.copyFrom (0, 0, monoBuffer, 0, 0, toKeep);
+        {
+            for (int channel = 0; channel < capturedInput.getNumChannels(); ++channel)
+                capturedInput.copyFrom (channel, 0, loopBuffer,
+                                        juce::jmin (channel, numChannels - 1), 0, toKeep);
+
+            // The detector keeps the mono sum it has always analysed.
+            analysisInput.copyFrom (0, 0, monoBuffer, 0, 0, toKeep);
+        }
 
         capturedInputLength.store (toKeep);
     }
@@ -717,8 +727,10 @@ void HackBrownAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlo
     inputProcessor.prepare (sampleRate);
 
     // Allocated here, on the message thread, so recordAudio never has to.
-    capturedInput.setSize(1, juce::jmax(1, (int)(maxCapturedInputSeconds * sampleRate)));
+    capturedInput.setSize(renderChannels, juce::jmax(1, (int)(maxCapturedInputSeconds * sampleRate)));
     capturedInput.clear();
+    analysisInput.setSize(1, capturedInput.getNumSamples());
+    analysisInput.clear();
     capturedInputLength.store(0);
     wasRecording = false;
 
@@ -793,9 +805,66 @@ bool HackBrownAudioProcessor::shouldReplaceNote (int midiNote) const
     if (midiNote == drumMidiMap.at (snare)) return replaceSnare;
     if (midiNote == drumMidiMap.at (hat))   return replaceHat;
 
-    // Anything unclassified keeps falling back to the hat sample as before;
-    // the checkboxes only govern the three named drums.
-    return true;
+    // A hit the classifier could not place is rendered with the hat sample, so
+    // the hat's own box governs it. It used to be replaced whatever the boxes
+    // said, which with only one drum ticked meant unknown hits were still cut
+    // out of the recording and stood in for - a swap the user never asked for,
+    // heard as a click wherever one of them sat next to a kept hit.
+    return replaceHat;
+}
+
+namespace
+{
+    /** A buffer's length with its silent tail taken off.
+
+        Only samples at or below the floor are dropped, so nothing audible is
+        cut: the padding is buffer that was cleared and never written to, and
+        every hit that reaches the end is ramped to zero before it.
+    */
+    /** applyGainRamp on one channel at a time would leave the other side of a
+        stereo hit unramped, so every ramp in the render goes through here.
+    */
+    void rampAllChannels (juce::AudioBuffer<float>& buffer, int start, int length,
+                          float startGain, float endGain)
+    {
+        if (length <= 0)
+            return;
+
+        for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+            buffer.applyGainRamp (channel, start, length, startGain, endGain);
+    }
+
+    /** Silences a span across every channel. */
+    void clearAllChannels (juce::AudioBuffer<float>& buffer, int start, int length)
+    {
+        if (length <= 0)
+            return;
+
+        for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+            buffer.clear (channel, start, length);
+    }
+
+    int lengthWithoutSilentTail (const juce::AudioBuffer<float>& buffer)
+    {
+        constexpr float silenceFloor = 1.0e-6f;   // -120 dBFS
+
+        int length = buffer.getNumSamples();
+
+        while (length > 0)
+        {
+            bool silent = true;
+
+            for (int channel = 0; channel < buffer.getNumChannels() && silent; ++channel)
+                silent = std::abs (buffer.getSample (channel, length - 1)) <= silenceFloor;
+
+            if (! silent)
+                break;
+
+            --length;
+        }
+
+        return length;
+    }
 }
 
 juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
@@ -804,7 +873,7 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
     int outputNumSamples)
 {
     juce::AudioBuffer<float> out;
-    out.setSize(2, outputNumSamples);
+    out.setSize(renderChannels, outputNumSamples);
     out.clear();
 
     // Hits kept at their original audio render here, apart from the samples, so
@@ -812,7 +881,7 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
     // originals may already sit at full scale; running them through the same
     // gain would push them into clipping.
     juce::AudioBuffer<float> kept;
-    kept.setSize(1, outputNumSamples);
+    kept.setSize(renderChannels, outputNumSamples);
     kept.clear();
 
     int offset = 0;
@@ -820,7 +889,183 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
     if (events.size() >= 1) {
         offset = events[0].sampleIndex * playbackSpeed;
     }
-    
+
+    // Where every event lands in the output, worked out up front: a hit kept
+    // at its own audio has to know whether a replaced hit follows it closely
+    // enough to be run into, and the events are not guaranteed to be sorted.
+    std::vector<int> eventStart (events.size());
+
+    for (size_t e = 0; e < events.size(); ++e)
+        eventStart[e] = (int) (events[e].sampleIndex * playbackSpeed) - offset;
+
+    const int fadeInSamples          = (int) (unreplacedHitFadeInSeconds  * sampleRate);
+    const int keptFadeOutSamples     = (int) (unreplacedHitFadeOutSeconds * sampleRate);
+    const int replacedFadeOutSamples = (int) (replacedHitFadeOutSeconds   * sampleRate);
+    const int stitchSamples          = (int) (keptHitStitchSeconds        * sampleRate);
+
+    const int capturedLength = juce::jmin (capturedInputLength.load(), capturedInput.getNumSamples());
+
+    // With all three drums replaced the loop is pure samples and there is
+    // nothing of the recording worth keeping. Switch one off, though, and what
+    // was asked for is the loop as it was played with some of its hits swapped
+    // out - so the recording goes down whole and the replaced hits are cut out
+    // of it, rather than the kept hits being reassembled against silence.
+    const bool replacingEverything = replaceKick && replaceSnare && replaceHat;
+
+    // The bed only lines up while the hits sit where they were played. Once the
+    // grid or the stretch has moved them it would run against them, so those
+    // renders keep splicing hit by hit.
+    const bool timingUnmodified = ! quantizeEnabled && std::abs (playbackSpeed - 1.0f) < 1.0e-6f;
+    const bool useBed = ! replacingEverything && timingUnmodified && capturedLength > offset;
+
+    /** The source span a kept event covers in the original recording, or an
+        empty span for anything else. storedHits is indexed by the event's
+        hitIndex and its onset is the unquantised position, which is what
+        capturedInput is indexed by.
+    */
+    const auto keptSpan = [this, capturedLength] (const DrumEventAbs& e, int& onset, int& length)
+    {
+        onset = length = 0;
+
+        if (shouldReplaceNote (e.midiNote) || e.hitIndex < 0 || e.hitIndex >= inputProcessor.storedHitsIndex)
+            return false;
+
+        const auto& hit = inputProcessor.storedHits[(size_t) e.hitIndex];
+
+        if (hit.buffer.getNumChannels() == 0)
+            return false;
+
+        onset = hit.onsetSample;
+        length = juce::jmin (hit.hitLength, hit.buffer.getNumSamples());
+
+        return length > 0 && capturedLength > 0;
+    };
+
+    /** The event that plays next, by position rather than by order. */
+    const auto nextEvent = [&eventStart] (size_t e)
+    {
+        int best = -1;
+
+        for (size_t n = 0; n < eventStart.size(); ++n)
+            if (eventStart[n] > eventStart[e] && (best < 0 || eventStart[n] < eventStart[(size_t) best]))
+                best = (int) n;
+
+        return best;
+    };
+
+    /** Whether a kept hit runs straight into the kept hit after it.
+
+        Both have to be kept - a replaced hit between them has its own
+        transient to protect - and they have to be within the stitch window of
+        each other in the recording. The output gap is checked against the
+        source gap as well: once the grid or the stretch has moved a hit, the
+        recording no longer has the right number of samples to bridge it with,
+        so those hits are faded as before.
+
+        `lengthOverride` passes the length this hit is actually being played
+        at, which may have been cut short; -1 asks for its own full length.
+    */
+    const auto stitchesForward = [&] (size_t e, int lengthOverride)
+    {
+        int onsetA = 0, lengthA = 0;
+
+        if (! keptSpan (events[e], onsetA, lengthA))
+            return false;
+
+        if (lengthOverride >= 0)
+            lengthA = lengthOverride;
+
+        const int j = nextEvent (e);
+
+        if (j < 0)
+            return false;
+
+        int onsetB = 0, lengthB = 0;
+
+        if (! keptSpan (events[(size_t) j], onsetB, lengthB))
+            return false;
+
+        const int sourceGap = onsetB - (onsetA + lengthA);
+        const int outputGap = eventStart[(size_t) j] - (eventStart[e] + lengthA);
+
+        return sourceGap >= 0 && sourceGap <= stitchSamples && sourceGap == outputGap;
+    };
+
+    if (useBed)
+    {
+        const int available = juce::jmin (outputNumSamples, capturedLength - offset);
+
+        if (available > 0)
+            for (int channel = 0; channel < kept.getNumChannels(); ++channel)
+                kept.copyFrom (channel, 0, capturedInput,
+                               juce::jmin (channel, capturedInput.getNumChannels() - 1),
+                               offset, available);
+
+        // Every stretch of the bed a replaced hit stands in for, in the order
+        // they play, so that each one's ramps can see what follows it.
+        struct Span { int start, end; };
+        std::vector<Span> spans;
+
+        for (size_t e = 0; e < events.size(); ++e)
+        {
+            if (! shouldReplaceNote (events[e].midiNote))
+                continue;
+
+            const int hitIndex = events[e].hitIndex;
+
+            if (hitIndex < 0 || hitIndex >= inputProcessor.storedHitsIndex)
+                continue;
+
+            const auto& hit = inputProcessor.storedHits[(size_t) hitIndex];
+            const int length = juce::jmax (0, juce::jmin (hit.hitLength, hit.buffer.getNumSamples()));
+
+            const int start = juce::jlimit (0, outputNumSamples, eventStart[e]);
+            const int end = juce::jlimit (start, outputNumSamples, eventStart[e] + length);
+
+            if (end > start)
+                spans.push_back ({ start, end });
+        }
+
+        std::sort (spans.begin(), spans.end(),
+                   [] (const Span& a, const Span& b) { return a.start < b.start; });
+
+        // Cut all of them out first: two hits close together would otherwise
+        // have one's ramp written over the other's silence.
+        for (const auto& span : spans)
+            clearAllChannels (kept, span.start, span.end - span.start);
+
+        for (size_t e = 0; e < spans.size(); ++e)
+        {
+            // Down before the hit, so the sample's transient arrives against
+            // silence rather than against the recording of the hit it replaces.
+            const int fadeOut = juce::jmin (keptFadeOutSamples, spans[e].start);
+
+            rampAllChannels (kept, spans[e].start - fadeOut, fadeOut, 1.0f, 0.0f);
+
+            const int end = spans[e].end;
+            const int nextStart = e + 1 < spans.size() ? spans[e + 1].start : outputNumSamples;
+
+            // ...and back up afterwards, unless the next replaced hit lands
+            // inside the ramp, in which case the bed stays down until it.
+            if (nextStart - end < fadeInSamples)
+            {
+                if (nextStart > end)
+                    clearAllChannels (kept, end, nextStart - end);
+            }
+            else
+            {
+                rampAllChannels (kept, end, juce::jmin (fadeInSamples, outputNumSamples - end), 0.0f, 1.0f);
+            }
+        }
+
+        // The render is only as long as the hits need, so a recording that runs
+        // on past the last one is cut off mid-signal. Ramp that edge rather
+        // than let the loop end on a step. Applied last, so no span's ramp can
+        // be written over it.
+        if (available >= outputNumSamples && capturedLength - offset > outputNumSamples)
+            rampAllChannels (kept, outputNumSamples - keptFadeOutSamples, keptFadeOutSamples, 1.0f, 0.0f);
+    }
+
     for (int i = 0; i < events.size(); i++) {
         //DBG("num events" << events.size());
         bool skipFilter = true;
@@ -830,31 +1075,96 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
 
         if (! replaced)
         {
+            // Already there, in the bed, along with everything around it.
+            if (useBed)
+                continue;
+
             // This drum is switched off: keep the hit's own audio in the loop.
             // It is spliced in at full level - it is already at its recorded
-            // lith a short fade at each end, because a hard cut into
-            // and out of the rendered material would click.
+            // one - with a short fade at each end, because a hard cut into and
+            // out of the rendered material would click.
             const int hitIndex = events[i].hitIndex;
 
             if (hitIndex < 0 || hitIndex >= inputProcessor.storedHitsIndex)
                 continue;
 
             const auto& hit = inputProcessor.storedHits[(size_t) hitIndex];
-            const int hitLength = juce::jmin (hit.hitLength, hit.buffer.getNumSamples());
+            int hitLength = juce::jmin (hit.hitLength, hit.buffer.getNumSamples());
 
             if (hitLength <= 0 || hit.buffer.getNumChannels() == 0)
                 continue;
 
-            copier.setSize (1, hitLength);
-            copier.copyFrom (0, 0, hit.buffer, 0, 0, hitLength);
+            // A replaced hit must meet its sample's transient cleanly, so kept
+            // audio running up to one is cut short and its fade-out brought
+            // forward to finish exactly where the sample begins.
+            int nextReplaced = outputNumSamples;
 
-            const int fadeIn = juce::jmin (hitLength / 2, (int) (unreplacedHitFadeInSeconds * sampleRate));
-            const int fadeOut = juce::jmin (hitLength / 2, (int) (unreplacedHitFadeOutSeconds * sampleRate));
+            for (size_t e = 0; e < events.size(); ++e)
+                if (shouldReplaceNote (events[e].midiNote) && eventStart[e] > eventStart[(size_t) i])
+                    nextReplaced = juce::jmin (nextReplaced, eventStart[e]);
 
-            if (fadeIn > 0 || fadeOut > 0)
+            hitLength = juce::jmin (hitLength, nextReplaced - eventStart[(size_t) i]);
+
+            if (hitLength <= 0)
+                continue;
+
+            // Whether this hit runs straight into the next one, and whether the
+            // previous one ran into it. Only the event that comes next counts:
+            // a replaced hit in between has already cut this one short above.
+            const bool stitchToNext = stitchesForward ((size_t) i, hitLength);
+            bool stitchFromPrevious = false;
+
+            for (size_t e = 0; e < events.size() && ! stitchFromPrevious; ++e)
+                if (e != (size_t) i)
+                    stitchFromPrevious = stitchesForward (e, -1) && nextEvent (e) == (int) i;
+
+            // Stitched forward, the hit is extended to the next one's onset with
+            // the recording's own audio, so the two play as one block.
+            const int tail = stitchToNext ? eventStart[(size_t) nextEvent ((size_t) i)]
+                                            - (eventStart[(size_t) i] + hitLength)
+                                          : 0;
+
+            copier.setSize (renderChannels, hitLength + tail);
+            copier.clear();
+
+            // storedHits keeps a mono copy for the classifier. capturedInput
+            // holds the same audio with its channels intact and is indexed by
+            // the same onset, so the hit is taken from there where it reaches,
+            // and only falls back to the mono copy when it does not.
+            const int from = hit.onsetSample;
+            const bool fromRecording = from >= 0 && capturedLength >= from + hitLength;
+
+            for (int channel = 0; channel < copier.getNumChannels(); ++channel)
             {
-                copier.applyGainRamp (0, 0, fadeIn, 0.0f, 1.0f);
-                copier.applyGainRamp (0, hitLength - fadeOut, fadeOut, 1.0f, 0.0f);
+                if (fromRecording)
+                    copier.copyFrom (channel, 0, capturedInput,
+                                     juce::jmin (channel, capturedInput.getNumChannels() - 1),
+                                     from, hitLength);
+                else
+                    copier.copyFrom (channel, 0, hit.buffer, 0, 0, hitLength);
+            }
+
+            if (tail > 0)
+            {
+                const int tailFrom = hit.onsetSample + hitLength;
+                const int available = juce::jmax (0, juce::jmin (tail, capturedLength - tailFrom));
+
+                if (available > 0)
+                    for (int channel = 0; channel < copier.getNumChannels(); ++channel)
+                        copier.copyFrom (channel, hitLength, capturedInput,
+                                         juce::jmin (channel, capturedInput.getNumChannels() - 1),
+                                         tailFrom, available);
+            }
+
+            const int total = copier.getNumSamples();
+
+            if (! stitchFromPrevious)
+                rampAllChannels (copier, 0, juce::jmin (total / 2, fadeInSamples), 0.0f, 1.0f);
+
+            if (! stitchToNext)
+            {
+                const int fadeOut = juce::jmin (total / 2, keptFadeOutSamples);
+                rampAllChannels (copier, total - fadeOut, fadeOut, 1.0f, 0.0f);
             }
         }
         else
@@ -869,8 +1179,10 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
             if (sound == nullptr || sound->getAudioData() == nullptr)
                 continue;
 
+            // Whatever the sample is - mono or stereo - is carried through as
+            // it is; a mono sample is spread over both sides at the write.
             copier = *sound->getAudioData();
-            copier.applyGainRamp(0, 0, copier.getNumSamples(), events[i].velocity01, events[i].velocity01);
+            copier.applyGain (events[i].velocity01);
         }
 
         if (!skipFilter) {
@@ -893,11 +1205,25 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
         if (startSample < 0 || numToCopy <= 0)
             continue;
 
-        auto writePtr = (replaced ? out : kept).getWritePointer(0);
-        auto readPtr = copier.getReadPointer(0);
-        
-        for (int i = 0; i < numToCopy; i++) {
-            writePtr[startSample + i] += readPtr[i];
+        // The sample's tail is ramped down over the part that is actually
+        // written, so a sample cut off by the end of the loop still lands
+        // softly. The head is left alone: that is the transient.
+        if (replaced)
+        {
+            const int fadeOut = juce::jmin (numToCopy / 2, replacedFadeOutSamples);
+            rampAllChannels (copier, numToCopy - fadeOut, fadeOut, 1.0f, 0.0f);
+        }
+
+        auto& target = replaced ? out : kept;
+
+        for (int channel = 0; channel < target.getNumChannels(); ++channel)
+        {
+            auto* writePtr = target.getWritePointer(channel);
+            auto* readPtr = copier.getReadPointer(juce::jmin(channel, copier.getNumChannels() - 1));
+
+            for (int n = 0; n < numToCopy; n++) {
+                writePtr[startSample + n] += readPtr[n];
+            }
         }
         
         //out.copyFrom(0, startSample, copier, 0, 0, numToCopy);
@@ -913,13 +1239,24 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
     // only the overall level moves.
     if (outputNumSamples > 0)
     {
-        const float peak = out.getMagnitude(0, 0, outputNumSamples);
+        const float peak = out.getMagnitude(0, outputNumSamples);
 
         if (peak > 0.0f)
-            out.applyGain(0, 0, outputNumSamples, 1.0f / peak);
+            out.applyGain(1.0f / peak);
 
-        out.addFrom(0, 0, kept, 0, 0, outputNumSamples);
+        for (int channel = 0; channel < out.getNumChannels(); ++channel)
+            out.addFrom(channel, 0, kept, juce::jmin(channel, kept.getNumChannels() - 1),
+                        0, outputNumSamples);
     }
+
+    // buildDrumBuffer sizes the render with room for the longest sample loaded
+    // to ring out, and nothing fills that room when the last hit is short. The
+    // loop ends where its audio does, so neither the preview nor a saved file
+    // carries seconds of silence on the end.
+    const int length = lengthWithoutSilentTail (out);
+
+    if (length < out.getNumSamples())
+        out.setSize (out.getNumChannels(), length, true, true, true);
 
     return out;
 }
@@ -1045,7 +1382,16 @@ void HackBrownAudioProcessor::recordAudio(juce::AudioBuffer<float>& buffer) {
 
         if (toKeep > 0 && totalNumInputChannels > 0)
         {
-            capturedInput.copyFrom(0, written, buffer, 0, 0, toKeep);
+            // A mono input is carried on both sides rather than left half
+            // silent; the analysis still reads channel 0 either way.
+            for (int channel = 0; channel < capturedInput.getNumChannels(); ++channel)
+                capturedInput.copyFrom(channel, written, buffer,
+                                       juce::jmin(channel, totalNumInputChannels - 1), 0, toKeep);
+
+            // What the detector gets is channel 0, exactly as it was before the
+            // capture kept both sides.
+            analysisInput.copyFrom(0, written, buffer, 0, 0, toKeep);
+
             capturedInputLength.store(written + toKeep);
         }
     }
@@ -1098,11 +1444,11 @@ void HackBrownAudioProcessor::playAudio(juce::AudioBuffer<float>& buffer, juce::
     const int remaining = source.getNumSamples() - renderedReadPos;
     const int toCopy = juce::jmin(numSamples, remaining);
 
-    auto* inputData = source.getReadPointer(0);
-
     for (int ch = 0; ch < buffer.getNumChannels(); ++ch) {
-        //buffer.copyFrom(ch, 0, renderedDrumBuffer, juce::jmin(ch, renderedDrumBuffer.getNumChannels()-1),
-        //                renderedReadPos, toCopy);
+        // Stereo out of a stereo source; a mono source still reaches every
+        // output, as it did when channel 0 was fanned out to all of them.
+        auto* inputData = source.getReadPointer(juce::jmin(ch, source.getNumChannels() - 1));
+
         float* channelData = buffer.getWritePointer(ch);
 
         for (int sample = 0; sample < toCopy; sample++) {
@@ -1135,10 +1481,11 @@ void HackBrownAudioProcessor::startPreview(PreviewSource source) {
         // take that starts mid-preview cannot overwrite what is being played.
         const int length = capturedInputLength.load();
 
-        inputPreviewBuffer.setSize(1, juce::jmax(0, length));
+        inputPreviewBuffer.setSize(capturedInput.getNumChannels(), juce::jmax(0, length));
 
         if (length > 0)
-            inputPreviewBuffer.copyFrom(0, 0, capturedInput, 0, 0, length);
+            for (int channel = 0; channel < inputPreviewBuffer.getNumChannels(); ++channel)
+                inputPreviewBuffer.copyFrom(channel, 0, capturedInput, channel, 0, length);
     }
 
     previewingInput.store(source == PreviewSource::input);
@@ -1337,7 +1684,20 @@ void HackBrownAudioProcessor::applyRestoredInput()
     const int toCopy = juce::jmin (length, capturedInput.getNumSamples());
 
     capturedInput.clear();
-    capturedInput.copyFrom (0, 0, restoredInput, 0, 0, toCopy);
+
+    for (int channel = 0; channel < capturedInput.getNumChannels(); ++channel)
+        capturedInput.copyFrom (channel, 0, restoredInput,
+                                juce::jmin (channel, restoredInput.getNumChannels() - 1), 0, toCopy);
+
+    // Rebuilt by averaging, which is what an uploaded loop was analysed as and
+    // what a mono take amounts to. A take recorded from a genuinely stereo
+    // input and then restored is the one case this does not reproduce exactly.
+    analysisInput.clear (0, 0, juce::jmin (toCopy, analysisInput.getNumSamples()));
+
+    for (int channel = 0; channel < restoredInput.getNumChannels(); ++channel)
+        analysisInput.addFrom (0, 0, restoredInput, channel, 0,
+                               juce::jmin (toCopy, analysisInput.getNumSamples()),
+                               1.0f / (float) restoredInput.getNumChannels());
     capturedInputLength.store (toCopy);
 
     restoredInput.setSize (0, 0);
@@ -1556,14 +1916,25 @@ std::vector<ClassifiedHit> HackBrownAudioProcessor::getTimedHits() const
 {
     std::vector<ClassifiedHit> timed = inputProcessor.classifiedHits;
 
-    if (quantizeEnabled) {
+    if (quantizeEnabled && ! timed.empty()) {
         DBG("Quantising!");
+
+        // The grid is anchored on the first hit of the take, not on sample
+        // zero. Nobody starts playing exactly on a beat, and a grid measured
+        // from the start of the recording would move every hit in it by that
+        // same opening gap - the whole take sitting consistently off the grid
+        // rather than on it. Anchored here, the first hit stays where it was
+        // played and everything else is snapped relative to it.
+        const int anchor = std::min_element (timed.begin(), timed.end(),
+                                             [] (const ClassifiedHit& a, const ClassifiedHit& b)
+                                             { return a.onsetSample < b.onsetSample; })->onsetSample;
+
         int quantizeUnitInSamples = (60.0f / effectiveQuantizeBpm()) * quantizeDivision * 4 * currentSampleRate;
         int maxSwingUnit = (static_cast<int>(((1.0f / 16.0f) / quantizeDivision)) * quantizeUnitInSamples) >> 1;
         maxSwingUnit *= 0.8;
         
         for (auto& hit : timed) {
-            int relativeStartSample = hit.onsetSample - startSample;
+            int relativeStartSample = hit.onsetSample - anchor;
             int unitIndex = std::floor(static_cast<float>(relativeStartSample) / static_cast<float>(quantizeUnitInSamples));
             int startingSample = unitIndex * quantizeUnitInSamples;
             int endingSample = startingSample + quantizeUnitInSamples;
@@ -1576,7 +1947,7 @@ std::vector<ClassifiedHit> HackBrownAudioProcessor::getTimedHits() const
             }
             
             if (std::abs(relativeStartSample - startingSample) > std::abs(relativeStartSample - endingSample)) startingSample = endingSample;
-            hit.onsetSample = startingSample + startSample;
+            hit.onsetSample = startingSample + anchor;
         }
     }
 

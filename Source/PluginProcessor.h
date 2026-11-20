@@ -279,7 +279,7 @@ public:
     // the timing code never sees a slider. Message thread only.
     enum class BpmSource { selected, host, file };
 
-    bool      quantizeEnabled  = true;
+    bool      quantizeEnabled  = false;
     BpmSource bpmSource        = BpmSource::host;
     double    quantizeBpm      = 120.0;         // the "Select BPM" slider
     double    quantizeDivision = 1.0 / 16.0;    // grid step as a fraction of a whole note
@@ -324,8 +324,30 @@ public:
     */
     void reanalyseCapturedInput();
 
-    static constexpr double unreplacedHitFadeInSeconds = 0.000;
-    static constexpr double unreplacedHitFadeOutSeconds = 0.005;
+    /** Declick ramps around every splice in the rendered loop.
+
+        A hit kept at its own audio is faded at both ends, because it is cut
+        out of a continuous take and lands against material it was never
+        joined to. A replaced hit is faded out at the end of its sample for
+        the same reason, but never faded in: the first milliseconds of a drum
+        sample are its transient, and ramping them is what makes a replaced
+        kick sound soft.
+
+        The fade in is kept inside InputProcessor::totalDelay - the cushion of
+        pre-onset audio every stored hit begins with - so that it ramps across
+        the silence before the hit rather than across its attack.
+    */
+    static constexpr double unreplacedHitFadeInSeconds  = 0.008;
+    static constexpr double unreplacedHitFadeOutSeconds = 0.010;
+    static constexpr double replacedHitFadeOutSeconds   = 0.010;
+
+    /** Two kept hits this close are played as one unbroken block: the gap
+        between them is filled from the original recording and the fade out of
+        the first and into the second are dropped. Hits that near each other
+        are one phrase rather than two events, and ramping twice across the
+        few milliseconds between them is audible as a gap that was not there.
+    */
+    static constexpr double keptHitStitchSeconds = 0.100;
 private:
     void reset();
 
@@ -436,10 +458,27 @@ private:
     juce::AudioBuffer<float> capturedInput;
     std::atomic<int> capturedInputLength { 0 };
 
+    /** The same take, mono, exactly as the detector has always been fed it:
+        channel 0 of a live take, and the averaged channels of an uploaded
+        loop. capturedInput now keeps the original's channels for playback and
+        for the bed, so this holds the analysis signal separately rather than
+        letting a re-analysis see a different signal from the first pass.
+        Written in step with capturedInput, so capturedInputLength covers both.
+    */
+    juce::AudioBuffer<float> analysisInput;
+
+    /** How many channels the capture, the preview and the render carry.
+
+        The analysis is mono and stays mono - onset detection and
+        classification see exactly what they always did - but everything that
+        is played or written out keeps both channels, so an uploaded stereo
+        loop and a stereo drum sample are not flattened on the way through.
+    */
+    static constexpr int renderChannels = 2;
+
     // A take read back from the plugin's state, held until prepareToPlay has
     // sized capturedInput for it. Empty at every other moment.
     juce::AudioBuffer<float> restoredInput;
-    int startSample = 0; // The sample number of the first hit in the input
     bool wasRecording = false;   // audio thread only; detects the start of a take
 
     // How many of inputProcessor.classifiedHits have already been played live,
