@@ -533,6 +533,10 @@ section p { max-width: 58ch; }
   padding: 14px 15px 15px;
   display: grid;
   gap: 10px;
+  /* A one-line label beside a two-line one would otherwise stretch its button
+     to fill the taller card; this keeps the button its own size and drops it
+     to the bottom, so the two buttons in a row stay level. */
+  align-content: space-between;
 }
 
 .cell .name {
@@ -541,7 +545,6 @@ section p { max-width: 58ch; }
   font-weight: 700;
 }
 
-.cell .what { font-size: 0.78rem; color: var(--ink-soft); line-height: 1.5; }
 
 /* The browser's own audio widget carries a grey bar, a timeline and a volume
    slider that fight the paper look, so each clip gets one button instead. */
@@ -764,53 +767,56 @@ footer {
 
           <div class="demo-row">
             <div class="cell">
-              <div class="name">Boom bap</div>
-              <div class="what">Beatboxed into a laptop mic</div>
-              <button class="play" type="button" data-src="demos/boom-bap-original.mp3"><svg class="play-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1l9 5-9 5z"/></svg><svg class="pause-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1h3v10H2zM7 1h3v10H7z"/></svg><span class="play-text">Play</span></button>
+              <div class="name">Boots and cats, beatboxed into a laptop mic</div>
+              <button class="play" type="button" data-src="demos/boots-cats-original.mp3"><svg class="play-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1l9 5-9 5z"/></svg><svg class="pause-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1h3v10H2zM7 1h3v10H7z"/></svg><span class="play-text">Play</span></button>
             </div>
             <div class="cell after">
-              <div class="name">Boom bap</div>
-              <div class="what">Vinyl kit, quantised to 1/16</div>
-              <button class="play" type="button" data-src="demos/boom-bap-drumify.mp3"><svg class="play-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1l9 5-9 5z"/></svg><svg class="pause-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1h3v10H2zM7 1h3v10H7z"/></svg><span class="play-text">Play</span></button>
+              <div class="name">Replaced with kick, hat, and clap, unquantized</div>
+              <button class="play" type="button" data-src="demos/boots-cats-drumify.mp3"><svg class="play-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1l9 5-9 5z"/></svg><svg class="pause-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1h3v10H2zM7 1h3v10H7z"/></svg><span class="play-text">Play</span></button>
             </div>
           </div>
 
           <div class="demo-row">
             <div class="cell">
-              <div class="name">Four on the floor</div>
-              <div class="what">Beatboxed into a laptop mic</div>
-              <button class="play" type="button" data-src="demos/four-floor-original.mp3"><svg class="play-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1l9 5-9 5z"/></svg><svg class="pause-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1h3v10H2zM7 1h3v10H7z"/></svg><span class="play-text">Play</span></button>
+              <div class="name">Drumstep rhythm, beatboxed into laptop mic</div>
+              <button class="play" type="button" data-src="demos/drumstep-original.mp3"><svg class="play-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1l9 5-9 5z"/></svg><svg class="pause-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1h3v10H2zM7 1h3v10H7z"/></svg><span class="play-text">Play</span></button>
             </div>
             <div class="cell after">
-              <div class="name">Four on the floor</div>
-              <div class="what">909 samples, locked to host tempo</div>
-              <button class="play" type="button" data-src="demos/four-floor-drumify.mp3"><svg class="play-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1l9 5-9 5z"/></svg><svg class="pause-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1h3v10H2zM7 1h3v10H7z"/></svg><span class="play-text">Play</span></button>
+              <div class="name">Replaced with dubstep kicks, hats, and snares, quantized</div>
+              <button class="play" type="button" data-src="demos/drumstep-drumify.mp3"><svg class="play-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1l9 5-9 5z"/></svg><svg class="pause-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1h3v10H2zM7 1h3v10H7z"/></svg><span class="play-text">Play</span></button>
             </div>
           </div>
 
           <div class="demo-row">
             <div class="cell">
-              <div class="name">Breakbeat</div>
-              <div class="what">An imported loop, not a voice</div>
+              <div class="name">Imported Drum n Bass Loop</div>
+              <button class="play" type="button" data-src="demos/dnb-original.mp3"><svg class="play-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1l9 5-9 5z"/></svg><svg class="pause-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1h3v10H2zM7 1h3v10H7z"/></svg><span class="play-text">Play</span></button>
+            </div>
+            <div class="cell after">
+              <div class="name">Changed to light micro drums</div>
+              <button class="play" type="button" data-src="demos/dnb-drumify.mp3"><svg class="play-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1l9 5-9 5z"/></svg><svg class="pause-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1h3v10H2zM7 1h3v10H7z"/></svg><span class="play-text">Play</span></button>
+            </div>
+          </div>
+
+          <div class="demo-row">
+            <div class="cell">
+              <div class="name">Imported House toploop</div>
+              <button class="play" type="button" data-src="demos/house-original.mp3"><svg class="play-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1l9 5-9 5z"/></svg><svg class="pause-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1h3v10H2zM7 1h3v10H7z"/></svg><span class="play-text">Play</span></button>
+            </div>
+            <div class="cell after">
+              <div class="name">Swapped hat and clap with more snappy hits</div>
+              <button class="play" type="button" data-src="demos/house-drumify.mp3"><svg class="play-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1l9 5-9 5z"/></svg><svg class="pause-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1h3v10H2zM7 1h3v10H7z"/></svg><span class="play-text">Play</span></button>
+            </div>
+          </div>
+
+          <div class="demo-row">
+            <div class="cell">
+              <div class="name">Imported Acoustic Breakbeat</div>
               <button class="play" type="button" data-src="demos/breakbeat-original.mp3"><svg class="play-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1l9 5-9 5z"/></svg><svg class="pause-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1h3v10H2zM7 1h3v10H7z"/></svg><span class="play-text">Play</span></button>
             </div>
             <div class="cell after">
-              <div class="name">Breakbeat</div>
-              <div class="what">Kick and snare replaced, hats left alone</div>
+              <div class="name">Switched with a less grainy snare</div>
               <button class="play" type="button" data-src="demos/breakbeat-drumify.mp3"><svg class="play-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1l9 5-9 5z"/></svg><svg class="pause-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1h3v10H2zM7 1h3v10H7z"/></svg><span class="play-text">Play</span></button>
-            </div>
-          </div>
-
-          <div class="demo-row">
-            <div class="cell">
-              <div class="name">Half time</div>
-              <div class="what">Beatboxed into a laptop mic</div>
-              <button class="play" type="button" data-src="demos/half-time-original.mp3"><svg class="play-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1l9 5-9 5z"/></svg><svg class="pause-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1h3v10H2zM7 1h3v10H7z"/></svg><span class="play-text">Play</span></button>
-            </div>
-            <div class="cell after">
-              <div class="name">Half time</div>
-              <div class="what">Acoustic kit, stretched to 0.8x</div>
-              <button class="play" type="button" data-src="demos/half-time-drumify.mp3"><svg class="play-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1l9 5-9 5z"/></svg><svg class="pause-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1h3v10H2zM7 1h3v10H7z"/></svg><span class="play-text">Play</span></button>
             </div>
           </div>
         </div>
