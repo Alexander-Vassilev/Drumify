@@ -267,7 +267,7 @@ public:
 
         Read on the audio thread every block, so it can be set from anywhere.
     */
-    std::atomic<bool> livePlayEnabled { true };
+    std::atomic<bool> livePlayEnabled { false };
     std::atomic<bool> isPlaybackOn { false };
     juce::AudioBuffer<float> renderedTestBuffer;
     InputProcessor inputProcessor;
