@@ -21,8 +21,8 @@
   /* The mahogany the whole page is keyed to. Held as channels so the washes
      below can be mixed from the same numbers - change these two lines and
      every terracotta mark on the page follows. */
-  --accent-rgb:     237 92 124;
-  --accent-dim-rgb: 237 92 124;
+  --accent-rgb:     166 123 91;     /* light brown, #a67b5b */
+  --accent-dim-rgb: 166 123 91;
   --accent:     rgb(var(--accent-rgb));
   --accent-dim: rgb(var(--accent-dim-rgb));
   --accent-wash: rgb(var(--accent-dim-rgb) / 0.14);   /* hover fill on the clip buttons */
@@ -31,10 +31,23 @@
   --shadow:     rgba(63, 48, 44, 0.16);
   --silhouette: rgba(38, 37, 31, 0.20);   /* the offset copy behind every word */
 
-  --display: "Courier New", "Courier Prime", Courier, monospace;
-  --body:    "Courier New", "Courier Prime", Courier, monospace;
+  /* Priestacy is loaded from fonts/ below; until that file is there, or if it
+     fails to load, the page falls back to the Courier it was set in before. */
+  --display: "Priestacy", "Courier New", "Courier Prime", Courier, monospace;
+  --body:    "Priestacy", "Courier New", "Courier Prime", Courier, monospace;
 
   color-scheme: light;
+}
+
+/* Priestacy is not on Google Fonts, so it is served from this folder. Drop the
+   font file into docs/fonts/ under one of these names; the browser takes the
+   first one it finds. */
+@font-face {
+  font-family: "Priestacy";
+  src: url("fonts/Priestacy.woff2") format("woff2"),
+       url("fonts/Priestacy.otf") format("opentype"),
+       url("fonts/Priestacy.ttf") format("truetype");
+  font-display: swap;
 }
 
 /* Served raw from this folder as well as wrapped by the artifact host, so the
