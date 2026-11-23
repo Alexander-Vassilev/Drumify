@@ -10,6 +10,12 @@ static constexpr int stftMaxWindowCount = 300;
 // Window the transient ZCR is measured over, and where to start it when the
 // envelope follower finds no distinct spike.
 static constexpr int transientZcrWindowLength = 700;
+
+/** The rate every trained parameter in this classifier was fitted at. Features
+    measured at another rate are scaled to what this one would have given, so
+    the distributions keep their meaning whatever the session is running at.
+*/
+static constexpr double trainedSampleRate = 44100.0;
 static constexpr int transientZcrFallbackStart = 300;
 
 // The most samples the Schmitt-style crossing detector's level averages over.
@@ -96,6 +102,13 @@ using FrameSeries = FixedFloats<maxAnalysisFrames>;
 
 struct HitFeatures
 {
+    /** The rate the hit was captured at. The spectrum below is a set of bins,
+        and only this says what frequency each of them stands for - so anything
+        that reads the spectrum in Hz has to be handed it rather than assuming
+        a rate of its own.
+    */
+    double sampleRate = 44100.0;
+
     float rms = 0.0f;
     float zcr = 0.0f;      // zero crossing rate over the whole hit
     float transientZcr = 0.0f;  // zcr over a fixed window at the transient

@@ -24,6 +24,53 @@
 
 namespace
 {
+    /** `source` re-rendered at `toRate`, or a plain copy of it when the two
+        rates already match - so a caller never has to check first.
+
+        Message thread only: it allocates. Lagrange interpolation, which is what
+        the uploaded-loop path has always used; this is that same conversion,
+        kept in one place now that several paths need it.
+    */
+    juce::AudioBuffer<float> resampledCopy (const juce::AudioBuffer<float>& source, int numSamples,
+                                            double fromRate, double toRate)
+    {
+        const int channels = source.getNumChannels();
+        const int length = juce::jmin (numSamples, source.getNumSamples());
+
+        if (channels <= 0 || length <= 0)
+            return {};
+
+        if (fromRate <= 0.0 || toRate <= 0.0 || std::abs (fromRate - toRate) < 0.01)
+        {
+            juce::AudioBuffer<float> copy (channels, length);
+
+            for (int channel = 0; channel < channels; ++channel)
+                copy.copyFrom (channel, 0, source, channel, 0, length);
+
+            return copy;
+        }
+
+        // How much input the interpolator eats per sample it produces. The
+        // output length is floored: asking for one sample more would have it
+        // read past the end of the input.
+        const double ratio = fromRate / toRate;
+        const int outLength = juce::jmax (1, (int) std::floor ((double) length / ratio));
+
+        juce::AudioBuffer<float> out (channels, outLength);
+        out.clear();
+
+        juce::LagrangeInterpolator resampler;
+
+        for (int channel = 0; channel < channels; ++channel)
+        {
+            resampler.reset();
+            resampler.process (ratio, source.getReadPointer (channel),
+                               out.getWritePointer (channel), outLength);
+        }
+
+        return out;
+    }
+
     /** The block size the standalone app asks its audio device for.
 
         A plugin has no say in this - the host owns the block size and simply
@@ -121,6 +168,14 @@ HackBrownAudioProcessor::HackBrownAudioProcessor()
 
 HackBrownAudioProcessor::~HackBrownAudioProcessor()
 {
+    // Nothing may arrive after this point: the re-detection it would run reads
+    // half of this object.
+    cancelPendingUpdate();
+}
+
+void HackBrownAudioProcessor::handleAsyncUpdate()
+{
+    reanalyseCapturedInput();
 }
 
 //==============================================================================
@@ -408,7 +463,17 @@ void HackBrownAudioProcessor::getLongestSampleLengthInSamples()
             // Get the shared pointer to the audio buffer holding the actual audio data
             if (auto audioData = samplerSound->getAudioData())
             {
-                int currentLength = audioData->getNumSamples();
+                // Counted in samples of the session, not of the file: a 44.1
+                // kHz sample laid into a 48 kHz render takes more of them, and
+                // this is the room the render leaves for the last hit to ring
+                // out in.
+                double stretch = 1.0;
+
+                if (auto* drumSound = dynamic_cast<DrumSamplerSound*> (samplerSound))
+                    if (drumSound->getSourceSampleRate() > 0.0 && currentSampleRate > 0.0)
+                        stretch = currentSampleRate / drumSound->getSourceSampleRate();
+
+                int currentLength = (int) std::ceil (audioData->getNumSamples() * stretch);
                 
                 if (currentLength > maxLength)
                     maxLength = currentLength;
@@ -602,10 +667,12 @@ void HackBrownAudioProcessor::processUploadedLoop(const juce::File& file)
     }
     
     const double sourceSampleRate = reader->sampleRate;
-    const double targetSampleRate = 44100.0;
-    
-    const double ratio = sourceSampleRate / targetSampleRate;
-    const int targetLength = static_cast<int> (std::ceil (static_cast<double> (reader->lengthInSamples) / ratio));
+
+    // Brought to the rate everything else is running at, whatever that is.
+    // Converting to a fixed 44.1 kHz, as this did, left an uploaded loop
+    // playing at the wrong speed in any session that was not at that rate -
+    // and left its onsets measured in samples of a rate nothing else used.
+    const double targetSampleRate = currentSampleRate > 0.0 ? currentSampleRate : 44100.0;
 
     // 2. Load the original file data into a temporary buffer
     juce::AudioBuffer<float> originalBuffer (static_cast<int> (reader->numChannels),
@@ -618,31 +685,10 @@ void HackBrownAudioProcessor::processUploadedLoop(const juce::File& file)
                   true,                             // fill left
                   true);                            // fill right
 
-    // 3. Prepare the final buffer at exactly 44.1 kHz
-    juce::AudioBuffer<float> normalizedBuffer (static_cast<int> (reader->numChannels), targetLength);
-    
-    // If the file is already 44.1 kHz, we can skip resampling and copy directly
-    if (std::abs (sourceSampleRate - targetSampleRate) < 0.01)
-    {
-        normalizedBuffer.makeCopyOf (originalBuffer);
-    }
-    else
-    {
-        DBG ("Resampling file from " << sourceSampleRate << " Hz to 44100 Hz...");
-        
-        juce::LagrangeInterpolator resampler;
-        
-        for (int channel = 0; channel < originalBuffer.getNumChannels(); ++channel)
-        {
-            resampler.reset();
-            
-            // Resample the channel into our normalized buffer
-            resampler.process (ratio,
-                               originalBuffer.getReadPointer (channel),
-                               normalizedBuffer.getWritePointer (channel),
-                               targetLength);
-        }
-    }
+    DBG ("Loaded file at " << sourceSampleRate << " Hz, session is at " << targetSampleRate << " Hz");
+
+    const auto normalizedBuffer = resampledCopy (originalBuffer, originalBuffer.getNumSamples(),
+                                                 sourceSampleRate, targetSampleRate);
 
     // 5. Pass the newly populated buffer to your analysis function
     analyzeLoadedDrumLoop (normalizedBuffer);
@@ -695,7 +741,34 @@ void HackBrownAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlo
     //    runDrumClassifierSmokeTests();
     //}
     //setLatencySamples(inputProcessor.hitClassifier.fft.getLatencyInSamples());
+
+    // Set before anything that depends on it. This used to be assigned at the
+    // very end, so everything prepared here - the filter, the detector, the
+    // buffers - was built against the rate of the session before this one, or
+    // against the 44.1 kHz this starts life at.
+    const double previousSampleRate = currentSampleRate;
+    currentSampleRate = sampleRate;
+
+    const bool rateChanged = previousSampleRate > 0.0
+                          && std::abs (previousSampleRate - sampleRate) > 0.01;
+
+    // capturedInput is resized and cleared below, which throws away whatever
+    // take was in it - and a host calls this again for a block size change as
+    // readily as for a rate change. So the take is taken out first, at the new
+    // rate if the rate is what moved, and put back once the buffer exists.
+    juce::AudioBuffer<float> carriedTake;
+
+    if (! recordingEnabled.load())
+        carriedTake = resampledCopy (capturedInput,
+                                     juce::jmin (capturedInputLength.load(), capturedInput.getNumSamples()),
+                                     previousSampleRate, sampleRate);
+
     inputProcessor.hitClassifier.fft.reset();
+
+    // The ODF weights its bins by the frequency each one stands for, and that
+    // mapping is the rate divided by the FFT size - so it has to be built again
+    // whenever the rate moves.
+    complexOnsetDetector.setupBinWeights (sampleRate);
     
     juce::dsp::ProcessSpec spec;
     spec.maximumBlockSize = samplesPerBlock;
@@ -703,7 +776,7 @@ void HackBrownAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlo
     //spec.numChannels = getTotalNumOutputChannels();
     spec.numChannels = 1;
     
-    auto coefficients = juce::dsp::IIR::Coefficients<float>::makePeakFilter(currentSampleRate, 1000, 2.0, 8.0f);
+    auto coefficients = juce::dsp::IIR::Coefficients<float>::makePeakFilter(sampleRate, 1000, 2.0, 8.0f);
     *bellFilter.coefficients = *coefficients;
     bellFilter.prepare(spec);
     bellFilter.reset();
@@ -739,6 +812,12 @@ void HackBrownAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlo
     // prepareToPlay sees the real length.
     applyRestoredInput();
 
+    // Nothing came from the state, but a take was already in memory when the
+    // rate moved: put the converted copy back where it was.
+    const bool carriedTakeInstalled = capturedInputLength.load() <= 0
+                                   && carriedTake.getNumSamples() > 0
+                                   && installCapturedInput (carriedTake);
+
     drumMidiMap[kick]  = 36;
     drumMidiMap[snare] = 38;
     drumMidiMap[hat]   = 42;
@@ -759,8 +838,16 @@ void HackBrownAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlo
 
     getLongestSampleLengthInSamples();
     
-    currentSampleRate = sampleRate;
-    
+    // The hits were found at the old rate, so every onset and length they hold
+    // counts in samples that are no longer the right size. Detecting the
+    // converted take again rebuilds all of it - hits, classes and the rendered
+    // loop - in the units the session now uses.
+    if ((carriedTakeInstalled && rateChanged) || restoredTakeWasConverted)
+    {
+        restoredTakeWasConverted = false;
+        triggerAsyncUpdate();
+    }
+
     logFile.open(file.getFullPathName().toStdString(), std::ios::out | std::ios::trunc);
     //makeTestRender(); //TEMP, remove it later!!
 }
@@ -780,17 +867,20 @@ bool HackBrownAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts)
     juce::ignoreUnused(layouts);
     return true;
 #else
-    // This is the place where you check if the layout is supported.
-    // In this template code we only support mono or stereo.
-    // Some plugin hosts, such as certain GarageBand versions, will only
-    // load plugins that support stereo bus layouts.
-    if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::mono()
-        && layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
+    // What comes back is a stereo drum loop - stereo samples, and an uploaded
+    // loop with the channels it arrived with - so the output is always stereo.
+    // Accepting mono here, as this did, let a host hand us a mono bus and the
+    // whole render came back folded onto one channel.
+    if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
         return false;
 
-    // This checks if the input layout matches the output layout
+    // A mouth is one source and a microphone is usually mono, so the input is
+    // allowed to be either. It need not match the output: nothing says a hit
+    // played in mono has to come back in mono.
 #if ! JucePlugin_IsSynth
-    if (layouts.getMainOutputChannelSet() != layouts.getMainInputChannelSet())
+    const auto in = layouts.getMainInputChannelSet();
+
+    if (in != juce::AudioChannelSet::mono() && in != juce::AudioChannelSet::stereo())
         return false;
 #endif
 
@@ -923,6 +1013,28 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
     const int stitchSamples          = (int) (keptHitStitchSeconds        * sampleRate);
 
     const int capturedLength = juce::jmin (capturedInputLength.load(), capturedInput.getNumSamples());
+
+    // A sample read from a 44.1 kHz file and laid straight into a 48 kHz render
+    // plays sharp and short. The live synth resamples as it plays, but this
+    // copies the audio in, so the conversion has to happen here - once per
+    // sound, since every hit of that drum needs the same one.
+    std::vector<std::pair<const DrumSamplerSound*, juce::AudioBuffer<float>>> convertedSamples;
+
+    const auto sampleAtRenderRate = [&convertedSamples, sampleRate] (const DrumSamplerSound::Ptr& sound)
+                                    -> juce::AudioBuffer<float>
+    {
+        for (const auto& converted : convertedSamples)
+            if (converted.first == sound.get())
+                return converted.second;
+
+        const auto& data = *sound->getAudioData();
+
+        convertedSamples.emplace_back (sound.get(),
+                                       resampledCopy (data, data.getNumSamples(),
+                                                      sound->getSourceSampleRate(), sampleRate));
+
+        return convertedSamples.back().second;
+    };
 
     // With all three drums replaced the loop is pure samples and there is
     // nothing of the recording worth keeping. Switch one off, though, and what
@@ -1158,7 +1270,13 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
             // the same onset, so the hit is taken from there where it reaches,
             // and only falls back to the mono copy when it does not.
             const int from = hit.onsetSample;
-            const bool fromRecording = from >= 0 && capturedLength >= from + hitLength;
+
+            // How much of this hit the recording still has. It used to be all
+            // or nothing: a hit running past the end of what was kept fell back
+            // to the mono copy entirely, rather than for just the part that was
+            // missing.
+            const int available = from >= 0 ? juce::jlimit (0, hitLength, capturedLength - from) : 0;
+            const bool fromRecording = available > 0;
 
             // Only the recording has anything before the onset; the stored copy
             // starts there, so a fallback has no lead-in to give.
@@ -1168,14 +1286,24 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
             copier.setSize (renderChannels, lead + hitLength + tail);
             copier.clear();
 
+            // Where the recording reaches it is used in full, channels and
+            // all. Where it runs out - a hit past the end of what was kept -
+            // the rest is topped up from the mono copy rather than left silent,
+            // so only the part that has no stereo to give is flat.
+            const int stereoSamples = fromRecording ? lead + available : 0;
+
             for (int channel = 0; channel < copier.getNumChannels(); ++channel)
             {
-                if (fromRecording)
+                if (stereoSamples > 0)
                     copier.copyFrom (channel, 0, capturedInput,
                                      juce::jmin (channel, capturedInput.getNumChannels() - 1),
-                                     from - lead, lead + hitLength);
-                else
-                    copier.copyFrom (channel, 0, hit.buffer, 0, 0, hitLength);
+                                     from - lead, stereoSamples);
+
+                const int remaining = lead + hitLength - stereoSamples;
+
+                if (remaining > 0)
+                    copier.copyFrom (channel, stereoSamples, hit.buffer, 0,
+                                     juce::jmax (0, stereoSamples - lead), remaining);
             }
 
             if (tail > 0)
@@ -1214,8 +1342,9 @@ juce::AudioBuffer<float> HackBrownAudioProcessor::renderDrumLoopOffline(
                 continue;
 
             // Whatever the sample is - mono or stereo - is carried through as
-            // it is; a mono sample is spread over both sides at the write.
-            copier = *sound->getAudioData();
+            // it is; a mono sample is spread over both sides at the write. Its
+            // rate is the one thing that does change, to the render's own.
+            copier = sampleAtRenderRate (sound);
             copier.applyGain (events[i].velocity01);
         }
 
@@ -1425,9 +1554,15 @@ void HackBrownAudioProcessor::recordAudio(juce::AudioBuffer<float>& buffer) {
                 capturedInput.copyFrom(channel, written, buffer,
                                        juce::jmin(channel, totalNumInputChannels - 1), 0, toKeep);
 
-            // What the detector gets is channel 0, exactly as it was before the
-            // capture kept both sides.
-            analysisInput.copyFrom(0, written, buffer, 0, 0, toKeep);
+            // What the detector gets is the mean of the input channels, so a
+            // take is heard the same way whichever side it arrived on - and a
+            // hit panned off to one of them is not half missed. A mono input
+            // is its own mean, so nothing changes there.
+            analysisInput.clear(0, written, toKeep);
+
+            for (int channel = 0; channel < totalNumInputChannels; ++channel)
+                analysisInput.addFrom(0, written, buffer, channel, 0, toKeep,
+                                      1.0f / (float) totalNumInputChannels);
 
             capturedInputLength.store(written + toKeep);
         }
@@ -1731,33 +1866,55 @@ namespace
     }
 }
 
-void HackBrownAudioProcessor::applyRestoredInput()
+bool HackBrownAudioProcessor::installCapturedInput (const juce::AudioBuffer<float>& source)
 {
-    const int length = restoredInput.getNumSamples();
+    const int length = juce::jmin (source.getNumSamples(), capturedInput.getNumSamples());
 
-    if (length <= 0 || restoredInput.getNumChannels() <= 0 || capturedInput.getNumSamples() <= 0)
-        return;
-
-    const int toCopy = juce::jmin (length, capturedInput.getNumSamples());
+    if (length <= 0 || source.getNumChannels() <= 0)
+        return false;
 
     capturedInput.clear();
 
     for (int channel = 0; channel < capturedInput.getNumChannels(); ++channel)
-        capturedInput.copyFrom (channel, 0, restoredInput,
-                                juce::jmin (channel, restoredInput.getNumChannels() - 1), 0, toCopy);
+        capturedInput.copyFrom (channel, 0, source,
+                                juce::jmin (channel, source.getNumChannels() - 1), 0, length);
 
     // Rebuilt by averaging, which is what an uploaded loop was analysed as and
     // what a mono take amounts to. A take recorded from a genuinely stereo
     // input and then restored is the one case this does not reproduce exactly.
-    analysisInput.clear (0, 0, juce::jmin (toCopy, analysisInput.getNumSamples()));
+    analysisInput.clear();
 
-    for (int channel = 0; channel < restoredInput.getNumChannels(); ++channel)
-        analysisInput.addFrom (0, 0, restoredInput, channel, 0,
-                               juce::jmin (toCopy, analysisInput.getNumSamples()),
-                               1.0f / (float) restoredInput.getNumChannels());
-    capturedInputLength.store (toCopy);
+    const int analysisLength = juce::jmin (length, analysisInput.getNumSamples());
+
+    for (int channel = 0; channel < source.getNumChannels(); ++channel)
+        analysisInput.addFrom (0, 0, source, channel, 0, analysisLength,
+                               1.0f / (float) source.getNumChannels());
+
+    capturedInputLength.store (length);
+
+    return true;
+}
+
+void HackBrownAudioProcessor::applyRestoredInput()
+{
+    if (restoredInput.getNumSamples() <= 0 || restoredInput.getNumChannels() <= 0
+        || capturedInput.getNumSamples() <= 0)
+        return;
+
+    // A session saved at one rate can be reopened at another. The samples went
+    // into the state exactly as they were recorded, so they are brought to the
+    // rate in force before anything indexes them.
+    const bool converted = restoredInputSampleRate > 0.0 && currentSampleRate > 0.0
+                        && std::abs (restoredInputSampleRate - currentSampleRate) > 0.01;
+
+    const auto take = resampledCopy (restoredInput, restoredInput.getNumSamples(),
+                                     restoredInputSampleRate, currentSampleRate);
+
+    if (installCapturedInput (take) && converted)
+        restoredTakeWasConverted = true;
 
     restoredInput.setSize (0, 0);
+    restoredInputSampleRate = 0.0;
 }
 
 void HackBrownAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
@@ -1909,8 +2066,7 @@ void HackBrownAudioProcessor::setStateInformation(const void* data, int sizeInBy
 
     // capturedInput is only sized once prepareToPlay has run, which may be
     // after this, so the take waits in restoredInput until it has.
-    double takeRate = 0.0;
-    readAudioChunk (in, restoredInput, takeRate);
+    readAudioChunk (in, restoredInput, restoredInputSampleRate);
     applyRestoredInput();
 
     double loopRate = 0.0;
@@ -1960,6 +2116,20 @@ void HackBrownAudioProcessor::setStateInformation(const void* data, int sizeInBy
 
         ++inputProcessor.storedHitsIndex;
     }
+
+    // The take came back at a rate other than the one in force and has been
+    // converted to it, so every onset and length just read is counted in
+    // samples of the old size. Finding the hits again in the converted take is
+    // what makes them line up with it. Left until here because the restore
+    // above would otherwise have written the old numbers straight back.
+    //
+    // When prepareToPlay has not run yet there is nowhere to have put the take,
+    // so the conversion has not happened either; prepareToPlay does both.
+    if (restoredTakeWasConverted)
+    {
+        restoredTakeWasConverted = false;
+        triggerAsyncUpdate();
+    }
 }
 
 //==============================================================================
@@ -1986,25 +2156,33 @@ std::vector<ClassifiedHit> HackBrownAudioProcessor::getTimedHits() const
                                              [] (const ClassifiedHit& a, const ClassifiedHit& b)
                                              { return a.onsetSample < b.onsetSample; })->onsetSample;
 
-        int quantizeUnitInSamples = (60.0f / effectiveQuantizeBpm()) * quantizeDivision * 4 * currentSampleRate;
-        int maxSwingUnit = (static_cast<int>(((1.0f / 16.0f) / quantizeDivision)) * quantizeUnitInSamples) >> 1;
+        // Kept as a real number rather than rounded to whole samples per step.
+        // A step of 551.25 samples truncated to 551 loses a quarter of a sample
+        // every time, which is inaudible on its own but adds up to several
+        // milliseconds across a few bars - enough to show as notes sitting just
+        // off the beat once the take is exported as MIDI.
+        const double quantizeUnitInSamples = (60.0 / effectiveQuantizeBpm()) * quantizeDivision * 4.0 * currentSampleRate;
+
+        // The int cast is on the ratio, not the product: at 1/8 and coarser it
+        // is zero, which is what has always switched swing off there.
+        double maxSwingUnit = (static_cast<int>(((1.0f / 16.0f) / quantizeDivision)) * quantizeUnitInSamples) * 0.5;
         maxSwingUnit *= 0.8;
         
         for (auto& hit : timed) {
-            int relativeStartSample = hit.onsetSample - anchor;
-            int unitIndex = std::floor(static_cast<float>(relativeStartSample) / static_cast<float>(quantizeUnitInSamples));
-            int startingSample = unitIndex * quantizeUnitInSamples;
-            int endingSample = startingSample + quantizeUnitInSamples;
+            const double relativeStartSample = hit.onsetSample - anchor;
+            const double unitIndex = std::floor(relativeStartSample / quantizeUnitInSamples);
+            double startingSample = unitIndex * quantizeUnitInSamples;
+            double endingSample = startingSample + quantizeUnitInSamples;
             
             if (swingAmount > 0) {
-                int numSamplesSwing = maxSwingUnit * swingAmount;
+                const double numSamplesSwing = maxSwingUnit * swingAmount;
                 
-                if (unitIndex & 1) startingSample += numSamplesSwing;
+                if (((int) unitIndex) & 1) startingSample += numSamplesSwing;
                 else endingSample += numSamplesSwing;
             }
             
             if (std::abs(relativeStartSample - startingSample) > std::abs(relativeStartSample - endingSample)) startingSample = endingSample;
-            hit.onsetSample = startingSample + anchor;
+            hit.onsetSample = anchor + juce::roundToInt (startingSample);
         }
     }
 
@@ -2034,11 +2212,20 @@ std::vector<ClassifiedHit> HackBrownAudioProcessor::getTimedHits() const
 void HackBrownAudioProcessor::buildDrumBuffer() {
     std::vector<DrumEventAbs> events;
     const double sr = currentSampleRate;
+    int firstSampleHit = 0;
     int lastSampleHit = 0;
     float lastSize = 0;
+    bool haveFirst = false;
 
     for (auto processedHit : getTimedHits()) {
-        lastSampleHit = processedHit.onsetSample;
+        if (! haveFirst)
+        {
+            firstSampleHit = processedHit.onsetSample;
+            haveFirst = true;
+        }
+
+        firstSampleHit = juce::jmin (firstSampleHit, processedHit.onsetSample);
+        lastSampleHit = juce::jmax (lastSampleHit, processedHit.onsetSample);
         lastSize = processedHit.durationSec;
         DBG("while adding processed hits, this is type: " << (int)processedHit.type);
         events.push_back({ processedHit.onsetSample, (int)processedHit.type, processedHit.rms,
@@ -2051,7 +2238,34 @@ void HackBrownAudioProcessor::buildDrumBuffer() {
                     e.sampleIndex << " " << e.midiNote << " " << e.velocity01);
     }
 
-    const int outLen = int(lastSampleHit + lastSize * sr + numSamplesLongestSound);
+    // The render opens at the first onset and spaces the rest out by
+    // playbackSpeed, so what it needs is the stretched distance from the first
+    // hit to the last. Asking for the last hit's unstretched position, as this
+    // did, left anything past that with nowhere to go - and the render drops
+    // what will not fit, so stretching to half speed quietly lost the back half
+    // of the loop.
+    const double speed = playbackSpeed > 0.0f ? (double) playbackSpeed : 1.0;
+    const double span = juce::jmax (0, lastSampleHit - firstSampleHit) * speed;
+
+    // Room after the last onset for it to ring out, and the cushion the render
+    // opens with in front of the first. Neither is stretched - playbackSpeed
+    // moves the hits apart, it does not slow the hits themselves down.
+    const double tail = (double) lastSize * sr + numSamplesLongestSound;
+    const double leadIn = startLeadInSeconds * sr;
+
+    int outLen = (int) std::ceil (span + tail + leadIn);
+
+    // With the hits left where they were played, the render lays the recording
+    // down whole underneath them - so the loop should end where the take ends,
+    // not where its last hit does. Anything the render does not use is silent
+    // and gets trimmed off again at the end of it.
+    if (! quantizeEnabled && std::abs (speed - 1.0) < 1.0e-6)
+    {
+        const int captured = juce::jmin (capturedInputLength.load(), capturedInput.getNumSamples());
+        const int bedStart = juce::jmax (0, firstSampleHit - (int) std::ceil (leadIn));
+
+        outLen = juce::jmax (outLen, captured - bedStart);
+    }
     DBG("lastSample");
     DBG(lastSampleHit);
     renderedDrumBuffer = renderDrumLoopOffline(events, sr, outLen);

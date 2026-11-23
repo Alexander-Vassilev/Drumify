@@ -366,6 +366,7 @@ void HitClassifier::extractFeaturesInto(const juce::AudioBuffer<float>& buffer, 
     // reserves, so nothing here can reach the allocator.
     f.stftData.clear();
     f.fftActive = true;
+    f.sampleRate = sampleRate > 0.0 ? sampleRate : 44100.0;
 
     f.rms = computeRMS(buffer, length);
     f.zcr = computeZeroCrossingRate(buffer, length);
@@ -382,6 +383,18 @@ void HitClassifier::extractFeaturesInto(const juce::AudioBuffer<float>& buffer, 
     // The same measurement with everything below 150 Hz removed first, so a
     // kick's fundamental cannot hold the crossing rate down on its own.
     f.highpassZcr = computeHighpassedTransientZcr(buffer, length, transientStart, sampleRate);
+
+    // Zero crossings are counted per sample, so the same sound reads lower at a
+    // higher rate: it spends more samples getting between the same two
+    // crossings. Every parameter the classifier was fitted with came from
+    // 44.1 kHz material, so each count is scaled to what that rate would have
+    // measured and the trained distributions keep their meaning. At 44.1 the
+    // factor is 1.
+    const float zcrToTunedRate = (float) (f.sampleRate / trainedSampleRate);
+
+    f.zcr          *= zcrToTunedRate;
+    f.transientZcr *= zcrToTunedRate;
+    f.highpassZcr  *= zcrToTunedRate;
     
     //DBG("length: " << f.durationSec);
     
@@ -573,7 +586,7 @@ HitType HitClassifier::classify(const HitFeatures& f, std::ofstream& csvFile, co
         //std::vector<int> dominantBands;
         
         for (int i = 0; i < analysisLen; i++) {
-            std::array<float, numFilters> fftFilterbank = applyMelFilterbank(f.stftData[i], 44100);
+            std::array<float, numFilters> fftFilterbank = applyMelFilterbank(f.stftData[i], f.sampleRate);
             
             float totalEnergy = 0.0f;
             
@@ -598,7 +611,7 @@ HitType HitClassifier::classify(const HitFeatures& f, std::ofstream& csvFile, co
                                                                                     noBassCentroidFirstBand,
                                                                                     numFilters);
             float lowMidCentroid = DrumFeatureExtractor::calculateSpectralCentroid(fftFilterbank, 0, 8);
-            float prominence = DrumFeatureExtractor::calculateLowMidProminence(f.stftData[i], 44100, FFTProcessor::numBins);
+            float prominence = DrumFeatureExtractor::calculateLowMidProminence(f.stftData[i], (float) f.sampleRate, FFTProcessor::numBins);
             float lowEnergy = DrumFeatureExtractor::calculateAvgEnergyInBand(fftFilterbank, 0, 3);
             float lowMidEnergy = DrumFeatureExtractor::calculateAvgEnergyInBand(fftFilterbank, 0, 5);
             float midEnergy = DrumFeatureExtractor::calculateAvgEnergyInBand(fftFilterbank, 5, 12);

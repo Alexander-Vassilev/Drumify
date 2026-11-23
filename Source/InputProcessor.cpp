@@ -198,9 +198,30 @@ void InputProcessor::processSample(float sample, float amp, bool externalTrigger
 */
 void InputProcessor::prepare(double sampleRate)
 {
-    analysisSampleRate = sampleRate;
+    analysisSampleRate = sampleRate > 0.0 ? sampleRate : tunedSampleRate;
 
-    hitClassifier.prepare (sampleRate);
+    hitClassifier.prepare (analysisSampleRate);
+
+    // Everything the detector counts in samples was chosen by ear at 44.1 kHz.
+    // Left alone, each of those counts would stand for a shorter stretch of
+    // time at a higher rate - a hit would have to settle in 8% less time at 48
+    // kHz, half the time at 96 - so the ones that mean a duration are scaled to
+    // the rate in force. At 44.1 the ratio is 1 and nothing moves.
+    const double rateScale = analysisSampleRate / tunedSampleRate;
+
+    const auto scaled = [rateScale] (int samplesAtTunedRate)
+    {
+        return juce::jmax (1, juce::roundToInt (samplesAtTunedRate * rateScale));
+    };
+
+    minOnsetSamples  = scaled (128);
+    minOffsetSamples = scaled (512);
+    minHitLength     = scaled (512);
+
+    // The pre-roll ring has to be able to hold the whole cushion, so the
+    // cushion is capped by it rather than being allowed to outgrow it.
+    padBeforeOnset = juce::jmin (scaled (256), preRollSamples - onsetLatency - 1);
+    totalDelay     = onsetLatency + padBeforeOnset;
 
     // The spectrum buffer is the big one - maxStftFrames frames of numBins
     // floats, about a megabyte. Taken here so the first hit of a take costs no

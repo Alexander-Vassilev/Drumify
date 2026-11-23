@@ -155,7 +155,8 @@ private:
 //==============================================================================
 /**
 */
-class HackBrownAudioProcessor  : public juce::AudioProcessor
+class HackBrownAudioProcessor  : public juce::AudioProcessor,
+                                 private juce::AsyncUpdater
 {
 public:
     //==============================================================================
@@ -380,6 +381,12 @@ private:
     */
     void applyRestoredInput();
 
+    /** Writes `source` into capturedInput and rebuilds the mono analysisInput
+        from it, clamped to the room prepareToPlay allocated. False if there is
+        nowhere to put it, or nothing to put there.
+    */
+    bool installCapturedInput (const juce::AudioBuffer<float>& source);
+
     /** Feeds `numSamples` of mono audio through onset detection and hit
         extraction in block-sized chunks, then flushes the last hit.
     */
@@ -499,6 +506,27 @@ private:
     // A take read back from the plugin's state, held until prepareToPlay has
     // sized capturedInput for it. Empty at every other moment.
     juce::AudioBuffer<float> restoredInput;
+
+    /** The rate that take was recorded at, which is not necessarily the one the
+        session is running at now.
+    */
+    double restoredInputSampleRate = 0.0;
+
+    /** Set when a take came in at a rate other than the current one, so that
+        prepareToPlay knows the hits saved alongside it are counted in samples
+        of the wrong size and detects the take again.
+    */
+    bool restoredTakeWasConverted = false;
+
+    /** Detecting a converted take again, once the host has finished loading.
+
+        Doing it inline would run a full detection and render inside
+        setStateInformation or prepareToPlay - the two calls a host makes while
+        it is opening a project, and both of which it expects to return
+        promptly. A minute-long take is enough work there for a host to decide
+        the plugin has failed to open.
+    */
+    void handleAsyncUpdate() override;
     bool wasRecording = false;   // audio thread only; detects the start of a take
 
     // How many of inputProcessor.classifiedHits have already been played live,

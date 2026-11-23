@@ -2203,7 +2203,7 @@ void HackBrownAudioProcessorEditor::loadDrumLoopFromDisk()
     hit lands at zero.
 */
 static constexpr int midiTicksPerQuarterNote = 960;
-static constexpr int midiMicrosecondsPerQuarter = 500000;   // 120 BPM
+static constexpr int midiMicrosecondsPerQuarter = 500000;   // 120 BPM, the fallback
 static constexpr int generalMidiDrumChannel = 10;
 
 bool HackBrownAudioProcessorEditor::writeMidiTo (const juce::File& destination, bool reportFailures)
@@ -2221,8 +2221,23 @@ bool HackBrownAudioProcessorEditor::writeMidiTo (const juce::File& destination, 
 
     {
         const auto sampleRate = audioProcessor.getSampleRate() > 0.0 ? audioProcessor.getSampleRate() : 44100.0;
-        const auto speed = (double) audioProcessor.playbackSpeed;
+        const auto speed = audioProcessor.playbackSpeed > 0.0f ? (double) audioProcessor.playbackSpeed : 1.0;
         const auto firstOnset = (double) hits.front().onsetSample * speed;
+
+        // The tempo the file declares. Written at 120 regardless, as it was,
+        // the notes land wherever they happen to fall in a piano roll: a take
+        // quantised to a 90 BPM grid is only on the beat if the file says 90.
+        //
+        // Stretching divides it, because the stretch is a change of tempo and
+        // nothing else - the same hits, further apart. A loop on a 90 BPM grid
+        // played at half speed is a 45 BPM loop, and its notes sit on exactly
+        // the same beats of it.
+        const auto gridBpm = audioProcessor.effectiveQuantizeBpm();
+        const auto exportBpm = (gridBpm > 0.0 ? gridBpm : 120.0) / speed;
+
+        const auto microsecondsPerQuarter = exportBpm > 0.0
+                                          ? (int) std::llround (60.0e6 / exportBpm)
+                                          : midiMicrosecondsPerQuarter;
 
         auto loudest = 0.0f;
 
@@ -2230,11 +2245,16 @@ bool HackBrownAudioProcessorEditor::writeMidiTo (const juce::File& destination, 
             loudest = juce::jmax (loudest, hit.rms);
 
         juce::MidiMessageSequence track;
-        track.addEvent (juce::MidiMessage::tempoMetaEvent (midiMicrosecondsPerQuarter));
+        track.addEvent (juce::MidiMessage::tempoMetaEvent (microsecondsPerQuarter));
 
-        const auto secondsToTicks = [] (double seconds)
+        // Rounded to whole ticks: a position that is a hair under a beat would
+        // otherwise be written as the tick below it, which is what puts a note
+        // a pixel to the left of the line in a piano roll. At 960 ticks to the
+        // quarter there is nothing finer worth keeping.
+        const auto secondsToTicks = [microsecondsPerQuarter] (double seconds)
         {
-            return seconds * 1.0e6 / (double) midiMicrosecondsPerQuarter * (double) midiTicksPerQuarterNote;
+            return std::round (seconds * 1.0e6 / (double) microsecondsPerQuarter
+                                       * (double) midiTicksPerQuarterNote);
         };
 
         for (const auto& hit : hits)

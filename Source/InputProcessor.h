@@ -658,20 +658,46 @@ private:
     //static constexpr float noveltyThreshold = 0.015f;
     static constexpr float noveltyThreshold = 0.007f;
 
-    static constexpr int minOnsetSamples  = 128;
-    static constexpr int minOffsetSamples = 512;
+    /** The rate every count below was tuned at. prepare() scales the ones that
+        stand for a length of time to whatever rate is actually in force, so the
+        detector behaves the same at 48 or 96 kHz as it does here.
+    */
+    static constexpr double tunedSampleRate = 44100.0;
+
+    // How long the signal has to hold above or below the thresholds before an
+    // onset or an offset is believed. Both are times, so both scale.
+    int minOnsetSamples  = 128;
+    int minOffsetSamples = 512;
 
     // --- Buffering ---
+
+    /** The most of one hit that is kept. A capacity rather than a time: it caps
+        the STFT frames HitFeatures reserves, so it stays fixed and a hit is
+        simply shorter in seconds at a higher rate.
+    */
     static constexpr int samplesPerHit   = 65536;
 
+    /** The ring the pre-onset audio is held in. Only totalDelay of it is ever
+        read, so there is room to spare at any rate; it stays fixed because it
+        is a plain array.
+    */
     static constexpr int preRollSamples  = 4096;
     float preRoll[preRollSamples] = {};
     int preRollIndex = 0;
     
     // Latency constants
-    static constexpr int onsetLatency   = 100; // Latency of the FFT + ODF + Statistical detector
-    static constexpr int padBeforeOnset  = 256;  // Silence cushion before the transient
-    static constexpr int totalDelay      = onsetLatency + padBeforeOnset; // 1756 samples total
+
+    /** The delay through the FFT, the ODF and the statistical detector. A fixed
+        number of samples whatever the rate - the FFT is the same size either
+        way - so this one does not scale.
+    */
+    static constexpr int onsetLatency   = 100;
+
+    /** The cushion of audio kept in front of the transient. A time, so it
+        scales, and totalDelay follows it.
+    */
+    int padBeforeOnset = 256;
+    int totalDelay     = onsetLatency + padBeforeOnset;
 
     float* writePtr = nullptr;
 

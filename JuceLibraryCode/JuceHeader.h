@@ -45,7 +45,7 @@
 namespace ProjectInfo
 {
     const char* const  projectName    = "Drumify";
-    const char* const  companyName    = "";
+    const char* const  companyName    = "Lightspark";
     const char* const  versionString  = "1.0.0";
     const int          versionNumber  = 0x10000;
 }
