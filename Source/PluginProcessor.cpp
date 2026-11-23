@@ -799,6 +799,12 @@ void HackBrownAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlo
     // per-hit work it does on the audio thread never reaches the allocator.
     inputProcessor.prepare (sampleRate);
 
+    // Mixing a block down to mono needs somewhere to put it, and recordAudio
+    // runs on the audio thread. Sized generously: a host that hands over more
+    // than it said it would still gets detected on, just from one channel.
+    monoInputScratch.setSize(1, juce::jmax(1, samplesPerBlock));
+    monoInputScratch.clear();
+
     // Allocated here, on the message thread, so recordAudio never has to.
     capturedInput.setSize(renderChannels, juce::jmax(1, (int)(maxCapturedInputSeconds * sampleRate)));
     capturedInput.clear();
@@ -1536,7 +1542,29 @@ void HackBrownAudioProcessor::recordAudio(juce::AudioBuffer<float>& buffer) {
         juce::ignoreUnused(channelData);
     }
 
-    auto* inputData = buffer.getReadPointer(0);
+    const int numSamples = buffer.getNumSamples();
+
+    // The detector hears the mean of the input channels, not whatever happens
+    // to be on the left. Reading channel 0, as this did, meant a take panned to
+    // the right was detected against silence - the capture kept it, so it was
+    // there to play back, but no hits were ever found in it. An uploaded loop
+    // never had this: that path has always summed the file to mono first.
+    const bool mixedToMono = totalNumInputChannels > 0
+                          && monoInputScratch.getNumSamples() >= numSamples;
+
+    if (mixedToMono)
+    {
+        monoInputScratch.clear(0, 0, numSamples);
+
+        for (int channel = 0; channel < totalNumInputChannels; ++channel)
+            monoInputScratch.addFrom(0, 0, buffer, channel, 0, numSamples,
+                                     1.0f / (float) totalNumInputChannels);
+    }
+
+    // Falls back to the left channel only if a host hands over a block larger
+    // than the one it asked for, which would leave nowhere to mix it.
+    auto* inputData = mixedToMono ? monoInputScratch.getReadPointer(0)
+                                  : buffer.getReadPointer(0);
 
     // Keep the raw input for the preview. copyFrom does not allocate, and the
     // length is clamped to the buffer sized in prepareToPlay, so this is safe on
@@ -1544,25 +1572,22 @@ void HackBrownAudioProcessor::recordAudio(juce::AudioBuffer<float>& buffer) {
     {
         const int written = capturedInputLength.load();
         const int room = capturedInput.getNumSamples() - written;
-        const int toKeep = juce::jmin(buffer.getNumSamples(), room);
+        const int toKeep = juce::jmin(numSamples, room);
 
         if (toKeep > 0 && totalNumInputChannels > 0)
         {
-            // A mono input is carried on both sides rather than left half
-            // silent; the analysis still reads channel 0 either way.
+            // The take itself keeps its channels as they arrived, so a loop
+            // panned to one side comes back panned to that side.
             for (int channel = 0; channel < capturedInput.getNumChannels(); ++channel)
                 capturedInput.copyFrom(channel, written, buffer,
                                        juce::jmin(channel, totalNumInputChannels - 1), 0, toKeep);
 
-            // What the detector gets is the mean of the input channels, so a
-            // take is heard the same way whichever side it arrived on - and a
-            // hit panned off to one of them is not half missed. A mono input
-            // is its own mean, so nothing changes there.
-            analysisInput.clear(0, written, toKeep);
-
-            for (int channel = 0; channel < totalNumInputChannels; ++channel)
-                analysisInput.addFrom(0, written, buffer, channel, 0, toKeep,
-                                      1.0f / (float) totalNumInputChannels);
+            // What is kept for a re-analysis is exactly what the detector just
+            // heard, so re-running it finds the same hits.
+            if (mixedToMono)
+                analysisInput.copyFrom(0, written, monoInputScratch, 0, 0, toKeep);
+            else
+                analysisInput.copyFrom(0, written, buffer, 0, 0, toKeep);
 
             capturedInputLength.store(written + toKeep);
         }
@@ -1573,7 +1598,7 @@ void HackBrownAudioProcessor::recordAudio(juce::AudioBuffer<float>& buffer) {
 
         // Only process if we have a corresponding input channel
         if (channel < totalNumInputChannels) {
-            classifyAudioBlock(channel, inputData, buffer.getNumSamples());
+            classifyAudioBlock(channel, inputData, numSamples);
         }
         else {
             // Clear any extra output channels

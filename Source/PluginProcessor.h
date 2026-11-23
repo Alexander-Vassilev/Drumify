@@ -503,6 +503,12 @@ private:
     */
     static constexpr int renderChannels = 2;
 
+    /** One block of input summed to mono, which is what the onset detector is
+        fed and what is kept for a re-analysis. Sized in prepareToPlay so that
+        mixing it costs the audio thread nothing but the add.
+    */
+    juce::AudioBuffer<float> monoInputScratch;
+
     // A take read back from the plugin's state, held until prepareToPlay has
     // sized capturedInput for it. Empty at every other moment.
     juce::AudioBuffer<float> restoredInput;
