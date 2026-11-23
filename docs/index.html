@@ -114,7 +114,12 @@ body {
   /* The tints are taken off the background animation, washed out far enough
      that the blocks still read against them. */
   background: linear-gradient(95deg,
-    #fbf6e2 0%, #eff7ee 27%, #e9eff9 54%, #f8ebf6 79%, #fdf3e9 100%);
+      #fff3ee,    /* cream */
+      #e2dbd3,    /* caramel */
+      #f7f7eb,    /* tan */
+      #f0e6e6,    /* taupe */
+      #e9e2d7,    /* latte */
+      #f5e2cd);
   border-bottom: 1px solid var(--rule);
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.65) inset,
               0 8px 20px -14px rgba(63, 48, 44, 0.45);
@@ -527,12 +532,12 @@ section p { max-width: 58ch; }
 @media (prefers-reduced-motion: no-preference) {
   #demos::before {
     background-image: linear-gradient(90deg,
-      #f3e5d6,    /* cream */
-      #e7c9a9,    /* caramel */
-      #d8bc9f,    /* tan */
-      #e2d3c4,    /* taupe */
-      #ecd3bb,    /* latte */
-      #f3e5d6);   /* cream again */
+      #f5e2cd,    /* cream */
+      #e7c7a7,    /* caramel */
+      #f7f7eb,    /* tan */
+      #f0e6e6,    /* taupe */
+      #e9e2d7,    /* latte */
+      #f5e2cd);   /* cream again */
     background-size: 200% 100%;
     background-repeat: repeat-x;
     animation: demos-rainbow 12s linear infinite;
