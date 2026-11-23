@@ -36,6 +36,10 @@
   --display: "Priestacy", "Courier New", "Courier Prime", Courier, monospace;
   --body:    "Priestacy", "Courier New", "Courier Prime", Courier, monospace;
 
+  /* Scales every piece of text on the page together: 1 is the default, 1.1 is
+     10% bigger, 0.9 is 10% smaller. */
+  --font-scale: 1;
+
   color-scheme: light;
 }
 
@@ -55,8 +59,9 @@
 html, body { margin: 0; padding: 0; }
 
 /* The page is set in Courier, which reads small for its size; this lifts every
-   rem on the page at once rather than tuning each rule. */
-:root { font-size: 17.5px; }
+   rem on the page at once rather than tuning each rule. Every size below is in
+   rem, so --font-scale reaches all of them through this one line. */
+:root { font-size: calc(17.5px * var(--font-scale)); }
 img, video { max-width: 100%; }
 
 * { box-sizing: border-box; }
@@ -215,7 +220,7 @@ a:focus-visible, button:focus-visible {
 }
 
 .hero h1 {
-  font-size: clamp(2.1rem, 6.6vw, 4.1rem);
+  font-size: clamp(2.1rem, calc(6.6vw * var(--font-scale)), 4.1rem);
   line-height: 1.08;
   letter-spacing: -0.01em;
   font-weight: 400;
@@ -397,7 +402,7 @@ a:focus-visible, button:focus-visible {
 section { display: grid; gap: 20px; }
 
 section h2 {
-  font-size: clamp(1.45rem, 3vw, 2rem);
+  font-size: clamp(1.45rem, calc(3vw * var(--font-scale)), 2rem);
   letter-spacing: -0.01em;
   text-shadow: 3px 3px 0 var(--silhouette);
 }
